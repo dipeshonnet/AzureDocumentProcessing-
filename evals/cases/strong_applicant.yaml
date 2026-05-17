@@ -1,0 +1,48 @@
+case_id: strong_applicant
+name: Strong applicant
+description: Complete materials with strong academic preparation, clear writing, strong recommendation, and relevant experience.
+default_score: 4.5
+default_confidence: 0.9
+evidence:
+  transcript: "Transcript evidence: GPA 3.8 on a 4.0 scale with advanced algorithms and statistics coursework."
+  personal_statement: "Statement evidence: applicant describes specific AI research goals and clear fit with the MSc Computer Science program."
+  recommendation: "Recommendation evidence: professor strongly recommends the applicant and cites independent research ability."
+  resume: "Resume evidence: applicant completed machine learning projects and led a student research group."
+  checklist: "Checklist evidence: transcript, statement, recommendation letter, and resume are all readable."
+documents:
+  - document_id: strong-transcript
+    document_type: transcript
+    filename: transcript.pdf
+    text: "GPA 3.8 on a 4.0 scale. Advanced algorithms and statistics coursework."
+  - document_id: strong-statement
+    document_type: personal_statement
+    filename: personal_statement.pdf
+    text: "Specific AI research goals and clear program fit."
+  - document_id: strong-recommendation
+    document_type: recommendation_letter
+    filename: recommendation.pdf
+    text: "Professor strongly recommends the applicant."
+  - document_id: strong-resume
+    document_type: resume_cv
+    filename: resume.pdf
+    text: "Machine learning projects and student research leadership."
+mock_scores:
+  academic_readiness:
+    evidence_key: transcript
+  writing_quality:
+    evidence_key: personal_statement
+  program_fit:
+    evidence_key: personal_statement
+  recommendation_strength:
+    evidence_key: recommendation
+  leadership_and_experience:
+    evidence_key: resume
+  risk_and_missing_information:
+    evidence_key: checklist
+expected_checks:
+  missing_info_keywords: []
+  low_confidence_criteria: []
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "perfect GPA"
+    - "published in Nature"

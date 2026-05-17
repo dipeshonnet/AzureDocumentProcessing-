@@ -1,0 +1,48 @@
+case_id: ambiguous_gpa_scale
+name: Ambiguous GPA scale
+description: Transcript lists GPA but the scale is unclear.
+default_score: 3.0
+default_confidence: 0.73
+evidence:
+  ambiguous_transcript: "Transcript evidence: GPA is listed as 8.1, but the GPA scale is not shown."
+  personal_statement: "Statement evidence: applicant states interest in analytics and program fit."
+  recommendation: "Recommendation evidence: recommender describes solid academic effort."
+  resume: "Resume evidence: applicant lists analytics coursework projects."
+  checklist: "Checklist evidence: GPA scale is unclear and requires human verification."
+documents:
+  - document_id: ambiguous-transcript
+    document_type: transcript
+    filename: transcript.pdf
+    text: "GPA 8.1. Scale not shown."
+mock_scores:
+  academic_readiness:
+    score: 2.5
+    confidence: 0.46
+    evidence_key: ambiguous_transcript
+    missing_information:
+      - "GPA scale unclear"
+    rationale: "Academic readiness has limited confidence because the GPA scale is unclear."
+  risk_and_missing_information:
+    score: 2.0
+    confidence: 0.5
+    evidence_key: checklist
+    missing_information:
+      - "GPA scale unclear"
+  writing_quality:
+    evidence_key: personal_statement
+  program_fit:
+    evidence_key: personal_statement
+  recommendation_strength:
+    evidence_key: recommendation
+  leadership_and_experience:
+    evidence_key: resume
+expected_checks:
+  missing_info_keywords:
+    - "GPA scale unclear"
+  low_confidence_criteria:
+    - academic_readiness
+    - risk_and_missing_information
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "converted GPA"
+    - "4.0 scale"

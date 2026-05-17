@@ -1,0 +1,131 @@
+rubric_id: default_admissions_rubric
+name: Default Admissions Review Rubric
+description: >
+  A configurable decision-support rubric for human admissions reviewers.
+  Scores are advisory only and must not auto-admit or auto-reject applicants.
+version: 1
+criteria:
+  - criterion_id: academic_readiness
+    name: Academic Readiness
+    description: Evidence of preparation for the target program, including coursework, grades, academic progression, and relevant preparation.
+    weight: 0.25
+    max_score: 5
+    scoring_levels:
+      "1": Minimal academic preparation or substantial unresolved academic risk.
+      "2": Some relevant preparation but notable gaps, weak performance, or unclear readiness.
+      "3": Adequate academic preparation with generally relevant coursework and acceptable performance.
+      "4": Strong preparation with relevant coursework, consistent performance, and positive academic indicators.
+      "5": Exceptional preparation with rigorous relevant coursework, strong performance, and clear readiness for advanced study.
+    evidence_required:
+      - transcript
+      - structured transcript extraction
+      - documented academic history
+    human_review_triggers:
+      - Missing or unreadable transcript
+      - GPA scale is unclear
+      - Conflicting institution or degree information
+      - Low extraction confidence on academic records
+
+  - criterion_id: writing_quality
+    name: Writing Quality
+    description: Clarity, organization, specificity, and professionalism of applicant-authored writing.
+    weight: 0.15
+    max_score: 5
+    scoring_levels:
+      "1": Writing is unclear, disorganized, or insufficient to evaluate.
+      "2": Writing communicates basic ideas but has significant clarity, structure, or specificity issues.
+      "3": Writing is understandable and adequately organized with some specific support.
+      "4": Writing is clear, focused, and well organized with relevant examples.
+      "5": Writing is compelling, polished, specific, and strongly aligned with graduate-level expectations.
+    evidence_required:
+      - personal statement
+      - writing sample when required
+      - reviewer inspection of original text
+    human_review_triggers:
+      - Personal statement is missing
+      - OCR quality prevents reliable writing assessment
+      - Possible template or unrelated essay detected
+      - AI summary lacks direct evidence snippets
+
+  - criterion_id: program_fit
+    name: Program Fit
+    description: Alignment between the applicant's goals, interests, experience, and the program's curriculum or outcomes.
+    weight: 0.2
+    max_score: 5
+    scoring_levels:
+      "1": Goals or interests are absent, generic, or poorly aligned with the program.
+      "2": Limited or weak alignment; fit requires substantial reviewer interpretation.
+      "3": Reasonable alignment between applicant goals and program offerings.
+      "4": Strong alignment with clear academic or professional goals tied to the program.
+      "5": Excellent alignment with specific program fit, mature goals, and clear rationale.
+    evidence_required:
+      - personal statement
+      - resume or CV
+      - program-specific application answers
+    human_review_triggers:
+      - Applicant goals are missing or contradictory
+      - Program name or intended field conflicts across documents
+      - Summary relies on inference without evidence
+
+  - criterion_id: recommendation_strength
+    name: Recommendation Strength
+    description: Strength, specificity, and credibility of recommendation letters.
+    weight: 0.15
+    max_score: 5
+    scoring_levels:
+      "1": Recommendation is missing, unreadable, or raises serious concerns.
+      "2": Recommendation is generic, weakly supported, or includes notable caveats.
+      "3": Recommendation is generally positive with some relevant support.
+      "4": Recommendation is strong, specific, and supports readiness or fit.
+      "5": Recommendation is exceptional, detailed, credible, and strongly supports admission review.
+    evidence_required:
+      - recommendation letter
+      - recommender identity or role where available
+      - relationship to applicant
+    human_review_triggers:
+      - Recommendation letter is missing
+      - Recommender role or relationship is unclear
+      - Recommendation contains caveats or conflicting signals
+      - Letter appears incomplete or unsigned
+
+  - criterion_id: leadership_and_experience
+    name: Leadership and Experience
+    description: Relevant work, research, projects, service, leadership, teamwork, awards, and skills.
+    weight: 0.15
+    max_score: 5
+    scoring_levels:
+      "1": Little to no relevant experience is documented.
+      "2": Limited experience with weak relevance or little supporting detail.
+      "3": Some relevant experience, projects, skills, or activities are documented.
+      "4": Strong relevant experience with meaningful responsibilities or accomplishments.
+      "5": Exceptional experience, leadership, impact, or achievements relevant to the program.
+    evidence_required:
+      - resume or CV
+      - structured resume extraction
+      - supporting application materials
+    human_review_triggers:
+      - Resume or CV is missing when required
+      - Experience dates or roles are unclear
+      - Claims lack supporting evidence
+      - OCR misses key resume sections
+
+  - criterion_id: risk_and_missing_information
+    name: Risk and Missing Information
+    description: Missing, inconsistent, low-confidence, or concerning information that requires reviewer attention before any human decision.
+    weight: 0.1
+    max_score: 5
+    scoring_levels:
+      "1": Critical required information is missing, inconsistent, or unreadable.
+      "2": Significant gaps or risks remain and require follow-up.
+      "3": Some minor gaps or uncertainties remain but core materials are reviewable.
+      "4": Materials are mostly complete with limited low-risk issues.
+      "5": Materials appear complete, readable, and internally consistent.
+    evidence_required:
+      - document checklist
+      - extraction confidence metadata
+      - reviewer verification of flagged issues
+    human_review_triggers:
+      - Required document is missing
+      - Any document is unreadable or low confidence
+      - Applicant identity or program information conflicts
+      - AI output marks fields uncertain

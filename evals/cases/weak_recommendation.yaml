@@ -1,0 +1,47 @@
+case_id: weak_recommendation
+name: Weak recommendation
+description: Recommendation letter contains caveats and little support.
+default_score: 3.1
+default_confidence: 0.75
+evidence:
+  transcript: "Transcript evidence: GPA 3.2 on a 4.0 scale with relevant coursework."
+  personal_statement: "Statement evidence: applicant gives plausible goals for the program."
+  weak_recommendation: "Recommendation evidence: recommender says performance was inconsistent and provides limited support."
+  resume: "Resume evidence: applicant lists internship experience."
+  checklist: "Checklist evidence: required documents are present, but recommendation strength is weak."
+documents:
+  - document_id: weak-rec-transcript
+    document_type: transcript
+    filename: transcript.pdf
+    text: "GPA 3.2 on a 4.0 scale."
+  - document_id: weak-rec-letter
+    document_type: recommendation_letter
+    filename: recommendation.pdf
+    text: "Performance was inconsistent and support is limited."
+mock_scores:
+  academic_readiness:
+    evidence_key: transcript
+  writing_quality:
+    evidence_key: personal_statement
+  program_fit:
+    evidence_key: personal_statement
+  recommendation_strength:
+    score: 1.5
+    confidence: 0.58
+    evidence_key: weak_recommendation
+    missing_information:
+      - "specific recommendation support is weak"
+    rationale: "Recommendation strength is limited because the recommender cites inconsistent performance."
+  leadership_and_experience:
+    evidence_key: resume
+  risk_and_missing_information:
+    evidence_key: checklist
+expected_checks:
+  missing_info_keywords:
+    - "specific recommendation support is weak"
+  low_confidence_criteria:
+    - recommendation_strength
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "exceptional recommendation"
+    - "unreserved endorsement"

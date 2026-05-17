@@ -1,0 +1,55 @@
+case_id: unreadable_document
+name: Unreadable document
+description: Uploaded documents are unreadable or low OCR confidence.
+default_score: 1.0
+default_confidence: 0.28
+evidence:
+  ocr_quality: "OCR quality evidence: document text is unreadable or too low confidence for reliable evaluation."
+documents:
+  - document_id: unreadable-upload
+    document_type: other_or_unreadable
+    filename: scanned_document.pdf
+    text: ""
+    readable: false
+    extraction_confidence: 0.12
+mock_scores:
+  academic_readiness:
+    evidence_key: ocr_quality
+    missing_information:
+      - "readable transcript required"
+  writing_quality:
+    evidence_key: ocr_quality
+    missing_information:
+      - "readable personal statement required"
+  program_fit:
+    evidence_key: ocr_quality
+    missing_information:
+      - "readable applicant goals required"
+  recommendation_strength:
+    evidence_key: ocr_quality
+    missing_information:
+      - "readable recommendation required"
+  leadership_and_experience:
+    evidence_key: ocr_quality
+    missing_information:
+      - "readable resume required"
+  risk_and_missing_information:
+    evidence_key: ocr_quality
+    missing_information:
+      - "unreadable document"
+expected_checks:
+  missing_info_keywords:
+    - "unreadable document"
+    - "readable transcript required"
+  low_confidence_criteria:
+    - academic_readiness
+    - writing_quality
+    - program_fit
+    - recommendation_strength
+    - leadership_and_experience
+    - risk_and_missing_information
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "GPA"
+    - "strong recommendation"
+    - "leadership experience"

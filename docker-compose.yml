@@ -1,0 +1,68 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: admissions_ai
+      POSTGRES_USER: admissions
+      POSTGRES_PASSWORD: admissions_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admissions -d admissions_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_ENV: local
+      APP_NAME: Admissions AI Reviewer API
+      BACKEND_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://admissions:admissions_dev_password@db:5432/admissions_ai
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_ROOT: /app/storage
+      MAX_UPLOAD_BYTES: 10485760
+      DOCUMENT_EXTRACTION_BACKEND: mock
+      DOCUMENT_CLASSIFICATION_BACKEND: mock
+      STRUCTURED_EXTRACTION_BACKEND: mock
+      DOCUMENT_SUMMARIZATION_BACKEND: mock
+      RUBRIC_SCORING_BACKEND: mock
+      DEV_AUTH_ENABLED: "true"
+      DEV_AUTH_DEFAULT_ACTOR: dev-local-reviewer
+      DEV_AUTH_DEFAULT_ROLE: admissions_reviewer
+      PII_REDACTION_BACKEND: none
+      AUTO_CREATE_DB_SCHEMA: "true"
+      REQUIRE_HUMAN_FINAL_DECISION: "true"
+      AI_DECISION_SUPPORT_ONLY: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  backend_storage:
+  frontend_node_modules:
+  postgres_data:

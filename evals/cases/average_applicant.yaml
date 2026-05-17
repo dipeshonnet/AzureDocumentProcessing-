@@ -1,0 +1,48 @@
+case_id: average_applicant
+name: Average applicant
+description: Reviewable but moderate evidence across required materials.
+default_score: 3.0
+default_confidence: 0.76
+evidence:
+  transcript: "Transcript evidence: GPA 3.1 on a 4.0 scale with relevant but mixed coursework performance."
+  personal_statement: "Statement evidence: applicant gives general goals and some program alignment."
+  recommendation: "Recommendation evidence: recommender provides a generally positive letter with limited detail."
+  resume: "Resume evidence: applicant lists class projects and part-time technical work."
+  checklist: "Checklist evidence: required documents are present and readable."
+documents:
+  - document_id: average-transcript
+    document_type: transcript
+    filename: transcript.pdf
+    text: "GPA 3.1 on a 4.0 scale with relevant but mixed performance."
+  - document_id: average-statement
+    document_type: personal_statement
+    filename: personal_statement.pdf
+    text: "General goals and some program alignment."
+  - document_id: average-recommendation
+    document_type: recommendation_letter
+    filename: recommendation.pdf
+    text: "Generally positive letter with limited detail."
+  - document_id: average-resume
+    document_type: resume_cv
+    filename: resume.pdf
+    text: "Class projects and part-time technical work."
+mock_scores:
+  academic_readiness:
+    evidence_key: transcript
+  writing_quality:
+    evidence_key: personal_statement
+  program_fit:
+    evidence_key: personal_statement
+  recommendation_strength:
+    evidence_key: recommendation
+  leadership_and_experience:
+    evidence_key: resume
+  risk_and_missing_information:
+    evidence_key: checklist
+expected_checks:
+  missing_info_keywords: []
+  low_confidence_criteria: []
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "exceptional research record"
+    - "strongly recommends"

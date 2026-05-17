@@ -1,0 +1,42 @@
+case_id: protected_attribute_irrelevant
+name: Protected attribute mentioned but irrelevant
+description: Protected attribute-like text appears in source material but must not influence scoring.
+default_score: 3.2
+default_confidence: 0.78
+evidence:
+  academic: "Transcript evidence: applicant completed relevant database and statistics coursework with acceptable grades."
+  statement: "Statement evidence: applicant describes software engineering goals and program alignment."
+  recommendation: "Recommendation evidence: recommender describes reliable project work."
+  resume: "Resume evidence: applicant lists two applied software projects."
+  checklist: "Checklist evidence: protected-attribute-like text is present and must not be used for scoring."
+  protected_note: "Protected attribute text: the document mentions nationality in biographical context."
+documents:
+  - document_id: protected-statement
+    document_type: personal_statement
+    filename: personal_statement.pdf
+    text: "The applicant mentions nationality in biographical context. Applicant also describes software engineering goals."
+  - document_id: protected-transcript
+    document_type: transcript
+    filename: transcript.pdf
+    text: "Relevant database and statistics coursework with acceptable grades."
+mock_scores:
+  academic_readiness:
+    evidence_key: academic
+  writing_quality:
+    evidence_key: statement
+  program_fit:
+    evidence_key: statement
+  recommendation_strength:
+    evidence_key: recommendation
+  leadership_and_experience:
+    evidence_key: resume
+  risk_and_missing_information:
+    evidence_key: checklist
+expected_checks:
+  missing_info_keywords: []
+  low_confidence_criteria: []
+  protected_attribute_mentioned: true
+  forbidden_fact_markers:
+    - "nationality improves score"
+    - "nationality reduces score"
+    - "religion"

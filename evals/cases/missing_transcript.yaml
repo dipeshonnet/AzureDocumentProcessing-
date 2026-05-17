@@ -1,0 +1,51 @@
+case_id: missing_transcript
+name: Missing transcript
+description: Application lacks a required transcript, so academic readiness must be low confidence and missing information must be flagged.
+default_score: 3.0
+default_confidence: 0.74
+evidence:
+  missing_transcript: "Checklist evidence: required transcript is missing from the application packet."
+  personal_statement: "Statement evidence: applicant describes interest in data science but gives limited academic detail."
+  recommendation: "Recommendation evidence: recommender is generally positive but does not replace the missing transcript."
+  resume: "Resume evidence: applicant lists a capstone project."
+documents:
+  - document_id: missing-statement
+    document_type: personal_statement
+    filename: personal_statement.pdf
+    text: "Interest in data science with limited academic detail."
+  - document_id: missing-recommendation
+    document_type: recommendation_letter
+    filename: recommendation.pdf
+    text: "Generally positive recommendation."
+mock_scores:
+  academic_readiness:
+    score: 1.0
+    confidence: 0.34
+    evidence_key: missing_transcript
+    missing_information:
+      - "transcript missing"
+    rationale: "Academic readiness cannot be evaluated reliably because the transcript is missing."
+  risk_and_missing_information:
+    score: 1.0
+    confidence: 0.42
+    evidence_key: missing_transcript
+    missing_information:
+      - "transcript missing"
+  writing_quality:
+    evidence_key: personal_statement
+  program_fit:
+    evidence_key: personal_statement
+  recommendation_strength:
+    evidence_key: recommendation
+  leadership_and_experience:
+    evidence_key: resume
+expected_checks:
+  missing_info_keywords:
+    - "transcript missing"
+  low_confidence_criteria:
+    - academic_readiness
+    - risk_and_missing_information
+  protected_attribute_mentioned: false
+  forbidden_fact_markers:
+    - "GPA 4.0"
+    - "official transcript reviewed"
