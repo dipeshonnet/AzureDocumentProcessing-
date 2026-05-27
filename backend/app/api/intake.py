@@ -7,16 +7,21 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.applications import storage_service_dependency
 from app.config import AppSettings, get_settings
 from app.db.dependencies import get_db
-from app.models import Applicant, Application, ApplicationDocument, IntakeJob
+from app.models import Applicant, Application, ApplicationDocument, IntakeJob, AuditLog
 from app.schemas.intake import IntakeJobRead, JobStatusResponse
 from app.security import UserRole
 from app.services.audit import AuditAction, record_audit_log
+from app.services.application_identity import (
+    PENDING_APPLICANT_FIRST_NAME,
+    PENDING_APPLICANT_LAST_NAME,
+    PENDING_PROGRAM_APPLIED,
+)
 from app.services.intake_jobs import ensure_intake_worker_started, enqueue_intake_job
 from app.services.local_auth import AuthenticatedUser, require_local_roles
 from app.services.rubric_store import get_saved_rubric
@@ -33,9 +38,10 @@ async def upload_intake_document(
     request: Request,
     file: UploadFile = File(...),
     rubric_id: str = Form(default="default_admissions_rubric"),
-    applicant_name: str = Form(default="Applicant"),
+    applicant_name: str | None = Form(default=None),
     applicant_id: str | None = Form(default=None),
-    program_applied: str = Form(default="Undeclared program"),
+    student_unique_id: str | None = Form(default=None),
+    program_applied: str | None = Form(default=None),
     intake_term: str = Form(default="Current intake"),
     application_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
@@ -46,9 +52,11 @@ async def upload_intake_document(
     ),
 ) -> IntakeJobRead:
     original_filename = validate_upload_filename(file.filename)
+    cleaned_applicant_name = (applicant_name or "").strip()
+    cleaned_program_applied = (program_applied or "").strip()
     content = await read_upload_with_limit(file, max_bytes=settings.max_upload_bytes)
     selected_rubric_id = rubric_id.strip() or "default_admissions_rubric"
-    selected_rubric = get_saved_rubric(db, selected_rubric_id)
+    selected_rubric = get_saved_rubric(db, selected_rubric_id, university_id=authenticated.user.university_id)
     if selected_rubric is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -62,27 +70,39 @@ async def upload_intake_document(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Application not found.",
             )
+        if authenticated.user.university_id and application.university_id != authenticated.user.university_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this application.",
+            )
         applicant = application.applicant
+        if cleaned_applicant_name:
+            applicant.first_name, applicant.last_name = _split_name(cleaned_applicant_name)
+        if cleaned_program_applied:
+            application.program_applied = cleaned_program_applied
+            if applicant.program_applied == PENDING_PROGRAM_APPLIED:
+                applicant.program_applied = cleaned_program_applied
+        if student_unique_id and not applicant.student_unique_id:
+            applicant.student_unique_id = student_unique_id.strip()
+        application.intake_term = intake_term.strip() or application.intake_term
     else:
         applicant = _get_or_create_applicant(
             db=db,
             applicant_id=applicant_id,
-            applicant_name=applicant_name,
-            program_applied=program_applied,
+            student_unique_id=student_unique_id,
+            applicant_name=cleaned_applicant_name,
+            program_applied=cleaned_program_applied,
             intake_term=intake_term,
         )
-        application = Application(
-            applicant_id=applicant.applicant_id,
-            submitted_at=datetime.now(timezone.utc),
-            processing_status="pending",
-            review_status="pending",
-            final_human_decision=None,
-            reviewer_notes=None,
-            processing_errors=[],
-            reviewer_audit_metadata=[],
+        application = _get_or_create_application_case(
+            db=db,
+            applicant=applicant,
+            program_applied=cleaned_program_applied,
+            intake_term=intake_term,
         )
-        db.add(application)
-        db.flush()
+        if authenticated.user.university_id:
+            application.university_id = authenticated.user.university_id
+            db.commit()
 
     document_id = str(uuid4())
     cleaned_filename = safe_filename(original_filename)
@@ -122,6 +142,9 @@ async def upload_intake_document(
             "intake_upload": True,
             "rubric_id": selected_rubric.rubric_id,
             "rubric_name": selected_rubric.name,
+            "student_unique_id": applicant.student_unique_id,
+            "program_applied": application_case_program(application),
+            "intake_term": application_case_intake_term(application),
         },
         processing_status="uploaded",
         page_count=None,
@@ -153,6 +176,9 @@ async def upload_intake_document(
             "file_size_bytes": len(content),
             "processing_status": "queued",
             "rubric_id": selected_rubric.rubric_id,
+            "student_unique_id": applicant.student_unique_id,
+            "program_applied": application_case_program(application),
+            "intake_term": application_case_intake_term(application),
         },
     )
     db.commit()
@@ -170,11 +196,20 @@ def list_job_status(
     job_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
     authenticated: AuthenticatedUser = Depends(
-        require_local_roles(UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
+        require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
     ),
 ) -> JobStatusResponse:
-    _ = authenticated
-    query = select(IntakeJob).order_by(IntakeJob.received_at.desc())
+    user = authenticated.user
+    if UserRole(user.role) == UserRole.SUPERADMIN:
+        query = select(IntakeJob).order_by(IntakeJob.received_at.desc())
+    else:
+        query = (
+            select(IntakeJob)
+            .join(Application, Application.application_id == IntakeJob.application_id)
+            .where(Application.university_id == user.university_id)
+            .order_by(IntakeJob.received_at.desc())
+        )
+        
     requested_ids = _split_job_ids(job_ids)
     if requested_ids:
         query = query.where(IntakeJob.job_id.in_(requested_ids))
@@ -187,13 +222,16 @@ def get_job(
     job_id: str,
     db: Session = Depends(get_db),
     authenticated: AuthenticatedUser = Depends(
-        require_local_roles(UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
+        require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
     ),
 ) -> IntakeJobRead:
-    _ = authenticated
+    user = authenticated.user
     job = db.get(IntakeJob, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    if UserRole(user.role) != UserRole.SUPERADMIN:
+        if job.application.university_id != user.university_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this job.")
     return _job_to_read(job)
 
 
@@ -202,12 +240,16 @@ def download_job_record(
     job_id: str,
     db: Session = Depends(get_db),
     authenticated: AuthenticatedUser = Depends(
-        require_local_roles(UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
+        require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
     ),
 ) -> Response:
+    user = authenticated.user
     job = db.get(IntakeJob, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    if UserRole(user.role) != UserRole.SUPERADMIN:
+        if job.application.university_id != user.university_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this job.")
     if job.status != "completed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -241,27 +283,44 @@ def _get_or_create_applicant(
     *,
     db: Session,
     applicant_id: str | None,
-    applicant_name: str,
-    program_applied: str,
+    student_unique_id: str | None,
+    applicant_name: str | None,
+    program_applied: str | None,
     intake_term: str,
 ) -> Applicant:
-    cleaned_id = (applicant_id or "").strip()
+    cleaned_id = (student_unique_id or applicant_id or "").strip()
+    cleaned_name = (applicant_name or "").strip()
+    cleaned_program = (program_applied or "").strip()
     if cleaned_id:
-        applicant = db.get(Applicant, cleaned_id)
+        applicant = db.scalar(
+            select(Applicant).where(func.lower(Applicant.student_unique_id) == cleaned_id.lower())
+        )
+        if applicant is None and applicant_id:
+            applicant = db.get(Applicant, applicant_id.strip())
         if applicant is not None:
-            applicant.program_applied = program_applied.strip() or applicant.program_applied
+            if applicant.student_unique_id is None:
+                applicant.student_unique_id = cleaned_id
+            if cleaned_name:
+                applicant.first_name, applicant.last_name = _split_name(cleaned_name)
+            if cleaned_program and applicant.program_applied == PENDING_PROGRAM_APPLIED:
+                applicant.program_applied = cleaned_program
             applicant.intake_term = intake_term.strip() or applicant.intake_term
             return applicant
 
-    first_name, last_name = _split_name(applicant_name)
-    new_applicant_id = cleaned_id if cleaned_id and len(cleaned_id) <= 36 else str(uuid4())
-    email_local = "".join(ch for ch in new_applicant_id.lower() if ch.isalnum()) or uuid4().hex
+    first_name, last_name = (
+        _split_name(cleaned_name)
+        if cleaned_name
+        else (PENDING_APPLICANT_FIRST_NAME, PENDING_APPLICANT_LAST_NAME)
+    )
+    new_applicant_id = str(uuid4())
+    email_local = "".join(ch for ch in (cleaned_id or new_applicant_id).lower() if ch.isalnum()) or uuid4().hex
     applicant = Applicant(
         applicant_id=new_applicant_id,
+        student_unique_id=cleaned_id or None,
         first_name=first_name,
         last_name=last_name,
         email=f"{email_local}@intake.local",
-        program_applied=program_applied.strip() or "Undeclared program",
+        program_applied=cleaned_program or PENDING_PROGRAM_APPLIED,
         intake_term=intake_term.strip() or "Current intake",
         status="submitted",
     )
@@ -270,10 +329,53 @@ def _get_or_create_applicant(
     return applicant
 
 
+def _get_or_create_application_case(
+    *,
+    db: Session,
+    applicant: Applicant,
+    program_applied: str | None,
+    intake_term: str,
+) -> Application:
+    case_program = (program_applied or "").strip() or applicant.program_applied or PENDING_PROGRAM_APPLIED
+    case_intake = intake_term.strip() or applicant.intake_term or "Current intake"
+    if applicant.student_unique_id:
+        existing = db.scalar(
+            select(Application)
+            .join(Applicant)
+            .where(
+                Applicant.applicant_id == applicant.applicant_id,
+                Application.final_human_decision.is_(None),
+                func.lower(func.coalesce(Application.program_applied, Applicant.program_applied)) == case_program.lower(),
+                func.lower(func.coalesce(Application.intake_term, Applicant.intake_term)) == case_intake.lower(),
+            )
+            .order_by(Application.submitted_at.desc(), Application.application_id.desc())
+        )
+        if existing is not None:
+            existing.program_applied = existing.program_applied or case_program
+            existing.intake_term = existing.intake_term or case_intake
+            return existing
+
+    application = Application(
+        applicant_id=applicant.applicant_id,
+        submitted_at=datetime.now(timezone.utc),
+        program_applied=case_program,
+        intake_term=case_intake,
+        processing_status="pending",
+        review_status="pending",
+        final_human_decision=None,
+        reviewer_notes=None,
+        processing_errors=[],
+        reviewer_audit_metadata=[],
+    )
+    db.add(application)
+    db.flush()
+    return application
+
+
 def _split_name(applicant_name: str) -> tuple[str, str]:
     parts = [part for part in applicant_name.strip().split() if part]
     if not parts:
-        return "Applicant", ""
+        return "", ""
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], " ".join(parts[1:])
@@ -310,7 +412,9 @@ def _job_to_read(job: IntakeJob) -> IntakeJobRead:
         finished_at=job.finished_at,
         applicant_name=f"{applicant.first_name} {applicant.last_name}".strip(),
         applicant_id=applicant.applicant_id,
-        program_applied=applicant.program_applied,
+        student_unique_id=applicant.student_unique_id,
+        program_applied=application_case_program(application),
+        intake_term=application_case_intake_term(application),
         application_status=application.processing_status,
         document_name=document.original_filename,
         file_size=file_size,
@@ -322,3 +426,11 @@ def _job_to_read(job: IntakeJob) -> IntakeJobRead:
         extracted_record=job.extracted_record or {},
         record_download_url=f"/api/jobs/{job.job_id}/record" if job.status == "completed" else None,
     )
+
+
+def application_case_program(application: Application) -> str:
+    return application.program_applied or application.applicant.program_applied
+
+
+def application_case_intake_term(application: Application) -> str:
+    return application.intake_term or application.applicant.intake_term

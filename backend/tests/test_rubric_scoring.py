@@ -17,14 +17,19 @@ from app.models import (
     ApplicationDocument,
     DocumentSummary,
     ExtractedDocumentContent,
+    IntakeJob,
     RubricCriterionScore,
     RubricScorecard,
+    SavedRubric,
 )
 from app.services.rubric_scoring import (
     MockRubricScoringService,
     RubricCriterionEvidence,
     RubricCriterionScoreResult,
+    RubricScoringContext,
+    build_rubric_scoring_prompt,
     calculate_scorecard,
+    saved_rubric_to_admissions_rubric,
 )
 from app.services.rubrics import load_default_rubric
 
@@ -163,6 +168,144 @@ def test_score_application_uses_all_default_criteria(
         persisted_scorecard = session.get(RubricScorecard, application_id)
         assert len(persisted_scores) == 6
         assert persisted_scorecard is not None
+
+
+def test_saved_rubric_sections_drive_scoring_and_document_alignment(
+    scoring_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = scoring_client
+    application_id = create_application(client, session_factory)
+    document_id = add_evidence_document(
+        session_factory,
+        application_id=application_id,
+        raw_text="Applicant connects legal goals to prior debate and investment management experience.",
+    )
+    with session_factory() as session:
+        document = session.get(ApplicationDocument, document_id)
+        assert document is not None
+        document.document_type = "personal_statement"
+        document.original_filename = "03_Personal_Statement.pdf"
+        session.add(
+            SavedRubric(
+                rubric_id="law_personal_statement_rubric",
+                name="Law admissions rubric",
+                description="Law program rubric.",
+                total_points=40,
+                sections=[
+                    {
+                        "section_id": "personal_statement",
+                        "name": "Personal Statement",
+                        "description": "Evaluate the applicant-authored personal statement.",
+                        "max_points": 20,
+                        "components": [
+                            {
+                                "component_id": "goals",
+                                "name": "Goals and Fit",
+                                "description": "Connection between goals and law school.",
+                                "max_points": 20,
+                                "rows": [
+                                    {
+                                        "row_id": "excellent",
+                                        "label": "Excellent",
+                                        "condition": "Specific legal goals with evidence",
+                                        "points": "20",
+                                        "notes": "Strong fit",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "section_id": "short_answer",
+                        "name": "Short answer",
+                        "description": "Evaluate short-answer responses only.",
+                        "max_points": 20,
+                        "components": [],
+                    },
+                ],
+                version=1,
+                is_active=True,
+            )
+        )
+        session.add(
+            IntakeJob(
+                application_id=application_id,
+                document_id=document_id,
+                rubric_id="law_personal_statement_rubric",
+                status="completed",
+                parser_mode="azure",
+                status_message="Done",
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        service = MockRubricScoringService(
+            db=session,
+            settings=AppSettings.from_mapping({"APP_ENV": "test", "RUBRIC_SCORING_BACKEND": "mock"}),
+        )
+        outcome = service.score_application(application_id)
+        by_id = {criterion.criterion_id: criterion for criterion in outcome.criteria}
+        document = session.get(ApplicationDocument, document_id)
+
+        assert set(by_id) == {"personal_statement", "short_answer"}
+        assert by_id["personal_statement"].score == 3.0
+        assert by_id["personal_statement"].supporting_evidence
+        assert by_id["short_answer"].score == 1.0
+        assert by_id["short_answer"].supporting_evidence == []
+        assert document is not None
+        assert document.document_type == "personal_statement"
+        assert document.classification_metadata["rubric_section_matches"][0]["rubric_section_id"] == "personal_statement"
+
+
+def test_saved_rubric_rows_are_included_in_scoring_prompt() -> None:
+    saved_rubric = SavedRubric(
+        rubric_id="law_personal_statement_rubric",
+        name="Law admissions rubric",
+        description="Law program rubric.",
+        total_points=20,
+        sections=[
+            {
+                "section_id": "personal_statement",
+                "name": "Personal Statement",
+                "description": "Evaluate personal statement quality.",
+                "max_points": 20,
+                "components": [
+                    {
+                        "component_id": "goals",
+                        "name": "Goals and Fit",
+                        "description": "Connection between goals and law school.",
+                        "max_points": 20,
+                        "rows": [
+                            {
+                                "row_id": "excellent",
+                                "label": "Excellent",
+                                "condition": "Specific legal goals with evidence",
+                                "points": "20",
+                                "notes": "Strong fit",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        version=1,
+        is_active=True,
+    )
+    rubric = saved_rubric_to_admissions_rubric(saved_rubric)
+    prompt = build_rubric_scoring_prompt(
+        RubricScoringContext(
+            application_id="app-1",
+            criterion=rubric.criteria[0],
+            rubric=rubric,
+            evidence_text="Applicant evidence.",
+            protected_attribute_text_present=False,
+        )
+    )
+
+    assert "Component: Goals and Fit" in prompt
+    assert "condition=Specific legal goals with evidence" in prompt
+    assert "points=20" in prompt
 
 
 def test_weighted_score_is_calculated_in_code() -> None:

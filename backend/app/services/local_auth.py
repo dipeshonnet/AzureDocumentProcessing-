@@ -67,13 +67,36 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def ensure_demo_user(db: Session) -> LocalUser:
+    from app.models.admissions import University
+    default_uni = db.scalar(select(University).where(University.name == "Default University"))
+    if default_uni is None:
+        default_uni = University(
+            name="Default University",
+            logo_data_url=None,
+            pages_per_billable_unit=1,
+        )
+        db.add(default_uni)
+        db.commit()
+        db.refresh(default_uni)
+
     user = db.scalar(select(LocalUser).where(LocalUser.email == DEMO_EMAIL))
     if user is not None:
+        dirty = False
+        if user.role != UserRole.SUPERADMIN.value:
+            user.role = UserRole.SUPERADMIN.value
+            dirty = True
+        if user.university_id != default_uni.university_id:
+            user.university_id = default_uni.university_id
+            dirty = True
+        if dirty:
+            db.commit()
+            db.refresh(user)
         return user
     user = LocalUser(
         email=DEMO_EMAIL,
         password_hash=hash_password(DEMO_PASSWORD),
-        role=UserRole.ADMIN.value,
+        role=UserRole.SUPERADMIN.value,
+        university_id=default_uni.university_id,
     )
     db.add(user)
     db.commit()
@@ -140,6 +163,24 @@ def get_authenticated_user(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
+    if authorization and authorization.startswith("ApiKey "):
+        api_key = authorization[len("ApiKey ") :].strip()
+        from app.models.admissions import University
+        university = db.scalar(select(University).where(University.api_key == api_key))
+        if university is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key.")
+        admin_user = db.scalar(
+            select(LocalUser)
+            .where(LocalUser.university_id == university.university_id, LocalUser.role == UserRole.ADMIN.value)
+        )
+        if admin_user is None:
+            admin_user = db.scalar(
+                select(LocalUser).where(LocalUser.university_id == university.university_id)
+            )
+        if admin_user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No user associated with university API key.")
+        return AuthenticatedUser(user=admin_user, token=api_key)
+
     token = bearer_token_from_header(authorization)
     if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
@@ -151,6 +192,7 @@ def get_authenticated_user(
 
 def require_local_roles(*roles: UserRole):
     allowed = set(roles)
+    allowed.add(UserRole.SUPERADMIN)
 
     def dependency(authenticated: AuthenticatedUser = Depends(get_authenticated_user)) -> AuthenticatedUser:
         if UserRole(authenticated.user.role) not in allowed:

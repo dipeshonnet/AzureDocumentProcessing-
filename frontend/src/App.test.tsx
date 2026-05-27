@@ -30,7 +30,9 @@ describe("operations console", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
-    expect(screen.getByText(/superadmin/i)).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Email")[0]).toHaveValue("");
+    expect(screen.getAllByLabelText("Password")[0]).toHaveValue("");
+    expect(screen.queryByText(/Demo:/i)).not.toBeInTheDocument();
   });
 
   it("renders selected file cards immediately after file selection", async () => {
@@ -66,6 +68,8 @@ describe("operations console", () => {
     render(<App />);
 
     await screen.findByText("Applicant document intake");
+    fireEvent.change(screen.getByLabelText("Student ID"), { target: { value: "A1" } });
+    fireEvent.change(screen.getByLabelText("Application program"), { target: { value: "Nursing" } });
     const input = screen.getByLabelText("Select admissions files or drag them here");
     fireEvent.change(input, {
       target: {
@@ -125,6 +129,42 @@ describe("operations console", () => {
     expect(screen.getByText("7")).toBeInTheDocument();
     expect(screen.getByText("$7.00")).toBeInTheDocument();
     expect(screen.getByText("SampleApplicationSMU.pdf")).toBeInTheDocument();
+  });
+
+  it("shows live recommendation scores in the recommendation rubric card", async () => {
+    mockAuthenticatedFetch([], [recommendationJob]);
+    setAuthToken("test-token");
+    render(<App />);
+
+    await screen.findByText("Applicant document intake");
+    fireEvent.click(await screen.findByRole("button", { name: "05A_Recommendation_Brett_Bricker.pdf" }));
+
+    expect(await screen.findByRole("heading", { name: "Letters of recommendation" })).toBeInTheDocument();
+    const recommendationCard = screen.getByRole("heading", { name: "Letters of recommendation" }).closest("article");
+    expect(recommendationCard).toHaveTextContent("20 / 20");
+    expect(recommendationCard).toHaveTextContent("I am writing to recommend Ariana Arvanitis for law school.");
+    expect(recommendationCard).toHaveTextContent("Recommendation Strength");
+
+    const shortAnswerCard = screen.getByRole("heading", { name: "Short answer" }).closest("article");
+    expect(shortAnswerCard).toHaveTextContent("0 / 20");
+    expect(shortAnswerCard).toHaveTextContent("Missing or not parsed yet. Human review required.");
+  });
+
+  it("shows saved rubric personal statement scores without using short answer aliases", async () => {
+    mockAuthenticatedFetch([personalStatementRubric], [personalStatementJob]);
+    setAuthToken("test-token");
+    render(<App />);
+
+    await screen.findByText("Applicant document intake");
+    fireEvent.click(await screen.findByRole("button", { name: "03_Personal_Statement.pdf" }));
+
+    const personalStatementCard = await screen.findByRole("heading", { name: "Personal Statement" });
+    expect(personalStatementCard.closest("article")).toHaveTextContent("20 / 20");
+    expect(personalStatementCard.closest("article")).toHaveTextContent("Applicant connects legal goals to prior experience.");
+
+    const shortAnswerCard = screen.getByRole("heading", { name: "Short answer" }).closest("article");
+    expect(shortAnswerCard).toHaveTextContent("0 / 20");
+    expect(shortAnswerCard).toHaveTextContent("Missing or not parsed yet. Human review required.");
   });
 
   it("submits profile password changes", async () => {
@@ -289,7 +329,9 @@ const sampleJobs = [
     finished_at: "2026-05-09T21:14:00Z",
     applicant_name: "Applicant One",
     applicant_id: "A1",
+    student_unique_id: "A1",
     program_applied: "Nursing",
+    intake_term: "Fall 2026",
     application_status: "completed",
     document_name: "Arvanitis_A_L45090489_CAS.pdf",
     file_size: 1000,
@@ -315,7 +357,9 @@ const sampleJobs = [
     finished_at: "2026-05-09T16:24:00Z",
     applicant_name: "Applicant One",
     applicant_id: "A1",
+    student_unique_id: "A1",
     program_applied: "Nursing",
+    intake_term: "Fall 2026",
     application_status: "completed",
     document_name: "SampleApplicationSMU.pdf",
     file_size: 2000,
@@ -328,6 +372,108 @@ const sampleJobs = [
     record_download_url: "/api/jobs/job-2/record"
   }
 ];
+
+const recommendationJob = {
+  job_id: "job-recommendation",
+  application_id: "app-1",
+  document_id: "doc-recommendation",
+  rubric_id: "default_admissions_rubric",
+  status: "completed",
+  progress: 100,
+  status_message: "Live processing completed.",
+  parser_mode: "azure",
+  received_at: "2026-05-17T14:42:00Z",
+  started_at: "2026-05-17T14:42:00Z",
+  finished_at: "2026-05-17T14:43:00Z",
+  applicant_name: "Ariana Arvanitis",
+  applicant_id: "A1",
+  student_unique_id: "A1",
+  program_applied: "Law school",
+  intake_term: "Fall 2026",
+  application_status: "needs_manual_review",
+  document_name: "05A_Recommendation_Brett_Bricker.pdf",
+  file_size: 2000,
+  document_type: "recommendation_letter",
+  page_count: 2,
+  extracted_text: "Recommendation letter content.",
+  summary: "A strong workplace recommendation for Ariana Arvanitis.",
+  section_analysis: [
+    {
+      section_id: "recommendation",
+      label: "Letters of recommendation",
+      score: 20,
+      max_score: 20,
+      evidence: ["I am writing to recommend Ariana Arvanitis for law school."],
+      rubric_criteria: ["Recommendation Strength"],
+      status: "review"
+    },
+    {
+      section_id: "writing_quality",
+      label: "Writing Quality",
+      score: 4,
+      max_score: 5,
+      evidence: ["Recommendation letter prose is clear."],
+      rubric_criteria: ["Writing Quality"],
+      status: "review"
+    }
+  ],
+  extracted_record: {},
+  record_download_url: "/api/jobs/job-recommendation/record"
+};
+
+const personalStatementRubric = {
+  rubric_id: "law_personal_statement_rubric",
+  name: "Law admissions rubric",
+  description: "Saved rubric from backend.",
+  version: 1,
+  total_points: 40,
+  is_active: true,
+  created_at: "2026-05-18T00:00:00Z",
+  updated_at: "2026-05-18T00:00:00Z",
+  sections: [
+    { section_id: "personal_statement", name: "Personal Statement", description: "Personal statement review.", max_points: 20, components: [] },
+    { section_id: "short_answer", name: "Short answer", description: "Short answer review.", max_points: 20, components: [] }
+  ]
+};
+
+const personalStatementJob = {
+  job_id: "job-personal-statement",
+  application_id: "app-1",
+  document_id: "doc-personal-statement",
+  rubric_id: "law_personal_statement_rubric",
+  status: "completed",
+  progress: 100,
+  status_message: "Live processing completed.",
+  parser_mode: "azure",
+  received_at: "2026-05-18T14:42:00Z",
+  started_at: "2026-05-18T14:42:00Z",
+  finished_at: "2026-05-18T14:43:00Z",
+  applicant_name: "Ariana Arvanitis",
+  applicant_id: "A1",
+  student_unique_id: "A1",
+  program_applied: "Law school",
+  intake_term: "Fall 2026",
+  application_status: "needs_manual_review",
+  document_name: "03_Personal_Statement.pdf",
+  file_size: 2000,
+  document_type: "personal_statement",
+  page_count: 2,
+  extracted_text: "Personal statement content.",
+  summary: "A personal statement about legal goals.",
+  section_analysis: [
+    {
+      section_id: "personal_statement",
+      label: "Personal Statement",
+      score: 20,
+      max_score: 20,
+      evidence: ["Applicant connects legal goals to prior experience."],
+      rubric_criteria: ["Personal Statement"],
+      status: "review"
+    }
+  ],
+  extracted_record: {},
+  record_download_url: "/api/jobs/job-personal-statement/record"
+};
 
 const sampleManagedUser = {
   user_id: "user-1",

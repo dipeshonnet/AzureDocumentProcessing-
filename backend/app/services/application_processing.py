@@ -34,6 +34,7 @@ from app.services.document_extraction import (
     ExtractionTimeoutError,
     UnsupportedDocumentTypeError,
     get_document_extraction_service,
+    resolved_document_page_count,
 )
 from app.services.rubric_scoring import (
     RubricScoringApplicationNotFoundError,
@@ -42,7 +43,6 @@ from app.services.rubric_scoring import (
     get_rubric_scoring_service,
     replace_persisted_scores,
 )
-from app.services.rubrics import RubricLoadError, load_default_rubric
 from app.services.structured_extraction import (
     StructuredExtractionDocumentNotFoundError,
     StructuredExtractionRequiresOcrError,
@@ -395,12 +395,11 @@ class ApplicationProcessingService:
 
         try:
             outcome = self.scoring_service.score_application(application_id)
-            rubric = load_default_rubric()
             score_rows, scorecard = replace_persisted_scores(
                 db=self.db,
                 application_id=application_id,
                 outcome=outcome,
-                rubric=rubric,
+                rubric=outcome.rubric,
             )
             record_audit_log(
                 db=self.db,
@@ -418,7 +417,7 @@ class ApplicationProcessingService:
             )
             self.db.commit()
             return score_rows, scorecard
-        except (RubricScoringApplicationNotFoundError, RubricScoringServiceError, RubricLoadError) as exc:
+        except (RubricScoringApplicationNotFoundError, RubricScoringServiceError) as exc:
             errors.append(
                 processing_error_record(
                     step=PROCESSING_STATUS_SCORING,
@@ -451,7 +450,7 @@ class ApplicationProcessingService:
             self.db.add(extracted)
             persisted = extracted
 
-        document.page_count = len(persisted.pages or [])
+        document.page_count = resolved_document_page_count(persisted)
         document.processing_status = "extracted"
         record_audit_log(
             db=self.db,
@@ -472,9 +471,13 @@ class ApplicationProcessingService:
 
         old_value = classification_audit_value(document)
         result = self.classification_service.classify_document(document.document_id)
+        existing_metadata = document.classification_metadata or {}
         document.document_type = result.document_type
         document.classification_confidence = result.confidence
-        document.classification_metadata = classification_metadata(result)
+        document.classification_metadata = {
+            **preserved_classification_metadata(existing_metadata),
+            **classification_metadata(result),
+        }
         document.processing_status = "classified"
         record_audit_log(
             db=self.db,
@@ -653,6 +656,25 @@ def classification_metadata(result: ClassificationResult) -> dict[str, Any]:
     }
 
 
+def preserved_classification_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    preserved_keys = (
+        "file_size",
+        "file_size_bytes",
+        "content_type",
+        "intake_upload",
+        "rubric_id",
+        "rubric_name",
+        "student_unique_id",
+        "program_applied",
+        "intake_term",
+    )
+    return {
+        key: metadata[key]
+        for key in preserved_keys
+        if key in metadata
+    }
+
+
 def extraction_audit_value(
     *,
     document: ApplicationDocument,
@@ -705,6 +727,8 @@ def structured_extraction_requires_human_review(value: object) -> bool:
     if isinstance(value, list):
         return any(structured_extraction_requires_human_review(item) for item in value)
     return False
+
+
 
 
 def document_requires_human_review(document: ApplicationDocument) -> bool:

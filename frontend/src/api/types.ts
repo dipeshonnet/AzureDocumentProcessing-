@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "admissions_reviewer" | "read_only_auditor";
+export type UserRole = "superadmin" | "admin" | "admissions_reviewer" | "read_only_auditor";
 
 export type AuthUser = {
   user_id: string;
@@ -6,6 +6,18 @@ export type AuthUser = {
   role: UserRole;
   billing_rate_per_unit?: number;
   university_logo_data_url?: string | null;
+  university_id?: string | null;
+  pages_per_billable_unit?: number;
+};
+
+export type University = {
+  university_id: string;
+  name: string;
+  logo_data_url: string | null;
+  pages_per_billable_unit: number;
+  api_key: string | null;
+  webhook_url: string | null;
+  created_at: string;
 };
 
 export type AuthResponse = {
@@ -39,7 +51,9 @@ export type Job = {
   finished_at: string | null;
   applicant_name: string;
   applicant_id: string;
+  student_unique_id: string | null;
   program_applied: string;
+  intake_term: string;
   application_status: string;
   document_name: string;
   file_size: number | null;

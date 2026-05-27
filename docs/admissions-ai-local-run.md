@@ -111,7 +111,7 @@ password: EverydayAI
 
 The UI includes Intake, Integrations, Rubrics, Users, and Profile pages. The Intake page uploads documents through `/api/upload`, polls `/api/jobs/status`, and displays parsed admissions records from the local mock parser by default. It displays `Decision support only`, confidence/evidence context, failed upload/parser messages, and never labels an applicant as automatically accepted or rejected.
 
-Rubrics are editable from the Rubrics page. The local database stores multiple saved rubrics with sections, sub-components, and row-level scoring rules. Saved rubrics immediately appear in the Intake page rubric dropdown so staff can select the applicable rubric before uploading applicant documents. The seeded operations rubric includes GPA, prerequisites, letters of recommendation, short answer, experience, and socioeconomic context sections based on the current local template.
+Rubrics are editable from the Rubrics page. The active `DATABASE_URL` database stores multiple saved rubrics in the `saved_rubrics` table, with sections, sub-components, and row-level scoring rules. In Azure staging this is the Azure PostgreSQL database, not a separate rubric database. Saved rubrics immediately appear in the Intake page rubric dropdown so staff can select the applicable rubric before uploading applicant documents. The seeded operations rubric includes GPA, prerequisites, letters of recommendation, short answer, experience, and socioeconomic context sections based on the current local template.
 
 ## Intake Operations API
 
@@ -132,12 +132,13 @@ GET  /api/jobs/status
 GET  /api/jobs/{job_id}
 GET  /api/jobs/{job_id}/record
 GET  /api/rubrics
+GET  /api/rubrics/diagnostics/storage
 GET  /api/rubrics/{rubric_id}
 POST /api/rubrics
 PUT  /api/rubrics/{rubric_id}
 ```
 
-`POST /api/upload` accepts one file per request plus applicant metadata, creates or reuses the admissions applicant/application records, stores the file with the existing path pattern, creates an intake job, and queues it for the in-process worker. The frontend uploads selected files sequentially with `XMLHttpRequest` so upload progress is real.
+`POST /api/upload` accepts one file per request plus the selected rubric, creates a temporary applicant/application record when no application is supplied, stores the file with the existing path pattern, creates an intake job, and queues it for the in-process worker. In live intake mode, applicant name and program are derived from parsed document text and structured extraction, then written back to the applicant record. The frontend uploads selected files sequentially with `XMLHttpRequest` so upload progress is real.
 
 `POST /api/upload` also validates the selected `rubric_id`. If the rubric is missing, the upload is rejected before creating the job.
 

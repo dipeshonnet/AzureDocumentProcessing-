@@ -36,7 +36,6 @@ from app.services.application_processing import (
     ApplicationProcessingService,
 )
 from app.services.audit import AuditAction, record_audit_log
-from app.services.rubrics import RubricLoadError, load_default_rubric
 from app.services.storage import (
     StorageError,
     StorageService,
@@ -124,6 +123,8 @@ def create_application(
     application = Application(
         applicant_id=payload.applicant_id,
         submitted_at=payload.submitted_at,
+        program_applied=payload.program_applied or applicant.program_applied,
+        intake_term=payload.intake_term or applicant.intake_term,
         processing_status=payload.processing_status,
         review_status=payload.review_status,
         final_human_decision=None,
@@ -140,6 +141,8 @@ def create_application(
         application_id=application.application_id,
         new_value={
             "applicant_id": payload.applicant_id,
+            "program_applied": application.program_applied,
+            "intake_term": application.intake_term,
             "processing_status": payload.processing_status,
             "review_status": payload.review_status,
         },
@@ -338,13 +341,12 @@ def score_application(
 
     try:
         outcome = scoring_service.score_application(application_id)
-        rubric = load_default_rubric()
     except RubricScoringApplicationNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found.",
         ) from exc
-    except (RubricScoringServiceError, RubricLoadError) as exc:
+    except RubricScoringServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Application rubric scoring failed.",
@@ -363,7 +365,7 @@ def score_application(
         db=db,
         application_id=application_id,
         outcome=outcome,
-        rubric=rubric,
+        rubric=outcome.rubric,
     )
     record_audit_log(
         db=db,

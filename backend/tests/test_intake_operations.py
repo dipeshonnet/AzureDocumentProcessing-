@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Generator
 from pathlib import Path
@@ -17,7 +18,7 @@ from app.db.session import create_db_engine, create_session_factory
 from app.main import create_app
 from app.models import Applicant, Application, ApplicationDocument, AuthSession, IntakeJob, LocalUser
 from app.security import UserRole
-from app.services.intake_jobs import reset_interrupted_jobs
+from app.services.intake_jobs import enqueue_queued_jobs, reset_interrupted_jobs
 from app.services.local_auth import create_session, hash_password
 from app.services.storage import LocalStorageService
 
@@ -110,6 +111,33 @@ def wait_for_terminal(client: TestClient, job_id: str, headers: dict[str, str]) 
     raise AssertionError(f"Job did not finish. Latest payload: {latest}")
 
 
+def test_enqueue_queued_jobs_recovers_pending_database_jobs(
+    intake_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, _storage_root = intake_client
+    headers = auth_headers(client)
+    response = client.post(
+        "/api/upload",
+        headers=headers,
+        data={},
+        files={"file": ("queued.pdf", b"queued document", "application/pdf")},
+    )
+    assert response.status_code == 201
+    job_id = response.json()["job_id"]
+    with session_factory() as session:
+        job = session.get(IntakeJob, job_id)
+        assert job is not None
+        job.status = "queued"
+        job.started_at = None
+        job.finished_at = None
+        session.commit()
+
+    queue: asyncio.Queue[str] = asyncio.Queue()
+
+    assert enqueue_queued_jobs(queue=queue, session_factory=session_factory) == [job_id]
+    assert queue.get_nowait() == job_id
+
+
 def test_demo_login_and_me_work(intake_client: tuple[TestClient, sessionmaker[Session], Path]) -> None:
     client, _session_factory, _storage_root = intake_client
 
@@ -118,7 +146,7 @@ def test_demo_login_and_me_work(intake_client: tuple[TestClient, sessionmaker[Se
     assert response.status_code == 200
     payload = response.json()
     assert payload["user"]["email"] == "superadmin"
-    assert payload["user"]["role"] == "admin"
+    assert payload["user"]["role"] == "superadmin"
     assert payload["user"]["billing_rate_per_unit"] == 1.0
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {payload['token']}"})
     assert me.status_code == 200
@@ -203,8 +231,8 @@ def test_registration_creates_local_reviewer(intake_client: tuple[TestClient, se
         },
     )
 
-    assert response.status_code == 201
-    assert response.json()["user"]["role"] == "admissions_reviewer"
+    assert response.status_code == 403
+    assert "Public self-registration is disabled" in response.json()["detail"]
 
 
 def test_unauthenticated_upload_is_rejected(intake_client: tuple[TestClient, sessionmaker[Session], Path]) -> None:
@@ -230,8 +258,9 @@ def test_upload_creates_admissions_records_and_intake_job(
         headers=headers,
         data={
             "applicant_name": "Ada Lovelace",
-            "applicant_id": "ADA-2026",
+            "student_unique_id": "ADA-2026",
             "program_applied": "MSc Analytics",
+            "intake_term": "Fall 2026",
             "rubric_id": "default_admissions_rubric",
         },
         files={"file": ("transcript.pdf", b"private transcript text", "application/pdf")},
@@ -241,16 +270,119 @@ def test_upload_creates_admissions_records_and_intake_job(
     payload = response.json()
     assert payload["status"] in {"queued", "processing", "completed"}
     assert payload["applicant_name"] == "Ada Lovelace"
+    assert payload["student_unique_id"] == "ADA-2026"
     assert payload["program_applied"] == "MSc Analytics"
+    assert payload["intake_term"] == "Fall 2026"
 
     with session_factory() as session:
-        applicant = session.get(Applicant, "ADA-2026")
+        applicant = session.scalar(select(Applicant).where(Applicant.student_unique_id == "ADA-2026"))
         document = session.get(ApplicationDocument, payload["document_id"])
         job = session.get(IntakeJob, payload["job_id"])
         assert applicant is not None
         assert document is not None
         assert job is not None
         assert (storage_root / document.blob_url_or_path).exists()
+
+
+def test_upload_reuses_application_case_for_same_student_program_and_intake(
+    intake_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, _storage_root = intake_client
+    headers = auth_headers(client)
+    data = {
+        "student_unique_id": "LAW-1001",
+        "program_applied": "Law school",
+        "intake_term": "Fall 2026",
+        "rubric_id": "default_admissions_rubric",
+    }
+
+    first = client.post(
+        "/api/upload",
+        headers=headers,
+        data=data,
+        files={"file": ("01_transcript.pdf", b"transcript", "application/pdf")},
+    )
+    second = client.post(
+        "/api/upload",
+        headers=headers,
+        data=data,
+        files={"file": ("02_recommendation.pdf", b"recommendation", "application/pdf")},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_payload = first.json()
+    second_payload = second.json()
+    assert second_payload["application_id"] == first_payload["application_id"]
+    assert second_payload["student_unique_id"] == "LAW-1001"
+
+    with session_factory() as session:
+        applicant = session.scalar(select(Applicant).where(Applicant.student_unique_id == "LAW-1001"))
+        assert applicant is not None
+        applications = list(session.scalars(select(Application).where(Application.applicant_id == applicant.applicant_id)))
+        documents = list(session.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == first_payload["application_id"])))
+        assert len(applications) == 1
+        assert len(documents) == 2
+
+
+def test_upload_creates_separate_application_case_for_same_student_different_program(
+    intake_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, _storage_root = intake_client
+    headers = auth_headers(client)
+    base_data = {
+        "student_unique_id": "CASE-2002",
+        "intake_term": "Fall 2026",
+        "rubric_id": "default_admissions_rubric",
+    }
+
+    nursing = client.post(
+        "/api/upload",
+        headers=headers,
+        data={**base_data, "program_applied": "Nursing"},
+        files={"file": ("nursing_statement.pdf", b"statement", "application/pdf")},
+    )
+    law = client.post(
+        "/api/upload",
+        headers=headers,
+        data={**base_data, "program_applied": "Law school"},
+        files={"file": ("law_statement.pdf", b"statement", "application/pdf")},
+    )
+
+    assert nursing.status_code == 201
+    assert law.status_code == 201
+    assert law.json()["application_id"] != nursing.json()["application_id"]
+
+    with session_factory() as session:
+        applicant = session.scalar(select(Applicant).where(Applicant.student_unique_id == "CASE-2002"))
+        assert applicant is not None
+        applications = list(session.scalars(select(Application).where(Application.applicant_id == applicant.applicant_id)))
+        assert {application.program_applied for application in applications} == {"Nursing", "Law school"}
+
+
+def test_upload_without_applicant_details_creates_pending_identity(
+    intake_client: tuple[TestClient, sessionmaker[Session], Path],
+) -> None:
+    client, session_factory, _storage_root = intake_client
+    headers = auth_headers(client)
+
+    response = client.post(
+        "/api/upload",
+        headers=headers,
+        data={
+            "rubric_id": "default_admissions_rubric",
+        },
+        files={"file": ("transcript.pdf", b"private transcript text", "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["applicant_name"] == "Pending extraction"
+    assert payload["program_applied"] == "Pending extraction"
+    with session_factory() as session:
+        job = session.get(IntakeJob, payload["job_id"])
+        assert job is not None
+        assert job.application.applicant.program_applied == "Pending extraction"
 
 
 def test_worker_transitions_job_to_completed(intake_client: tuple[TestClient, sessionmaker[Session], Path]) -> None:
@@ -279,7 +411,7 @@ def test_live_intake_mode_runs_application_processing_pipeline(
     response = client.post(
         "/api/upload",
         headers=headers,
-        data={"applicant_name": "Live Staging", "program_applied": "MSc Data Science"},
+        data={},
         files={"file": ("official_transcript.pdf", b"transcript", "application/pdf")},
     )
 
@@ -287,6 +419,9 @@ def test_live_intake_mode_runs_application_processing_pipeline(
 
     assert terminal["status"] == "completed"
     assert terminal["parser_mode"] == "azure"
+    assert terminal["file_size"] == len(b"transcript")
+    assert terminal["applicant_name"] == "Pending extraction"
+    assert terminal["program_applied"] == "MSc Computer Science"
     assert terminal["extracted_text"] == "Mock extracted document text."
     assert terminal["summary"] == "Mock summary grounded in extracted document text."
     assert len(terminal["section_analysis"]) == 6

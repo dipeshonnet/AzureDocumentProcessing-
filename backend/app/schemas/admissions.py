@@ -24,6 +24,7 @@ class AdmissionsSchema(BaseModel):
 
 
 class ApplicantBase(AdmissionsSchema):
+    student_unique_id: str | None = Field(default=None, max_length=120)
     first_name: NonEmptyString
     last_name: NonEmptyString
     email: EmailString
@@ -43,6 +44,8 @@ class ApplicantRead(ApplicantBase):
 class ApplicationBase(AdmissionsSchema):
     applicant_id: str
     submitted_at: datetime | None = None
+    program_applied: str | None = None
+    intake_term: str | None = None
     processing_status: IdentifierString = "pending"
     review_status: IdentifierString = "pending"
     final_human_decision: str | None = None

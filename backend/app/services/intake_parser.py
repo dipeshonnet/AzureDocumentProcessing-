@@ -45,10 +45,12 @@ class MockIntakeParserService(IntakeParserService):
 
         document_type = infer_document_type(filename)
         applicant_name = f"{applicant.first_name} {applicant.last_name}".strip()
+        program_applied = application.program_applied or applicant.program_applied
+        intake_term = application.intake_term or applicant.intake_term
         extracted_text = (
             f"Mock extracted admissions text for {applicant_name}. "
             f"Document {filename} was parsed as {document_type}. "
-            f"Program: {applicant.program_applied}. Rubric: {job.rubric_id}."
+            f"Program: {program_applied}. Rubric: {job.rubric_id}."
         )
         sections = [
             section("gpa", "GPA", 24, 30, "Mock evidence indicates GPA is reviewable."),
@@ -61,12 +63,15 @@ class MockIntakeParserService(IntakeParserService):
         record = {
             "applicant": {
                 "applicant_id": applicant.applicant_id,
+                "student_unique_id": applicant.student_unique_id,
                 "name": applicant_name,
-                "program_applied": applicant.program_applied,
-                "intake_term": applicant.intake_term,
+                "program_applied": program_applied,
+                "intake_term": intake_term,
             },
             "application": {
                 "application_id": application.application_id,
+                "program_applied": program_applied,
+                "intake_term": intake_term,
                 "status": application.processing_status,
             },
             "document": {

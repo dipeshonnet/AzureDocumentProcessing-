@@ -164,6 +164,24 @@ def test_can_save_rubric_with_rows_and_sub_components(
     assert update_response.json()["version"] == 2
 
 
+def test_rubric_storage_diagnostics_report_active_database_table(
+    rubric_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _session_factory = rubric_client
+    headers = auth_headers(client)
+    create_response = client.post("/api/rubrics", headers=headers, json=sample_rubric_payload())
+    assert create_response.status_code == 201
+
+    response = client.get("/api/rubrics/diagnostics/storage", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database_dialect"] == "sqlite"
+    assert payload["saved_rubrics_table_exists"] is True
+    assert payload["rubric_count"] >= 1
+    assert "custom_nursing_rubric" in payload["rubric_ids"]
+
+
 def test_upload_uses_selected_saved_rubric(
     rubric_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:

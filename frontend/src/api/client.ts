@@ -1,7 +1,8 @@
-import type { AuthResponse, AuthUser, Job, ManagedUser, Rubric, RubricInput } from "./types";
+import type { AuthResponse, AuthUser, Job, ManagedUser, Rubric, RubricInput, University } from "./types";
 
 const fallbackApiBaseUrl = "http://127.0.0.1:8000";
 const authTokenKey = "admission-analyser-token";
+const requestTimeoutMs = 20000;
 
 export const apiBaseUrl =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
@@ -21,14 +22,27 @@ export function clearAuthToken(): void {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), requestTimeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers
+      }
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Request timed out. Check that the backend is responding.");
     }
-  });
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     throw new Error(await responseError(response));
   }
@@ -117,10 +131,11 @@ export async function updateRubric(rubricId: string, input: RubricInput): Promis
 export type UploadInput = {
   file: File;
   rubric_id: string;
-  applicant_name: string;
+  student_unique_id?: string;
+  applicant_name?: string;
   applicant_id?: string;
-  program_applied: string;
-  intake_term: string;
+  program_applied?: string;
+  intake_term?: string;
   application_id?: string;
 };
 
@@ -157,9 +172,18 @@ export function uploadFileWithProgress(
     const formData = new FormData();
     formData.append("file", input.file);
     formData.append("rubric_id", input.rubric_id);
-    formData.append("applicant_name", input.applicant_name);
-    formData.append("program_applied", input.program_applied);
-    formData.append("intake_term", input.intake_term);
+    if (input.student_unique_id?.trim()) {
+      formData.append("student_unique_id", input.student_unique_id.trim());
+    }
+    if (input.applicant_name?.trim()) {
+      formData.append("applicant_name", input.applicant_name.trim());
+    }
+    if (input.program_applied?.trim()) {
+      formData.append("program_applied", input.program_applied.trim());
+    }
+    if (input.intake_term?.trim()) {
+      formData.append("intake_term", input.intake_term.trim());
+    }
     if (input.applicant_id?.trim()) {
       formData.append("applicant_id", input.applicant_id.trim());
     }
@@ -211,4 +235,47 @@ function xhrResponseError(xhr: XMLHttpRequest): string {
     // Keep the safe status message.
   }
   return `Upload failed with status ${xhr.status}`;
+}
+
+export async function fetchUniversities(): Promise<University[]> {
+  return request<University[]>("/api/auth/universities");
+}
+
+export async function createUniversity(name: string, adminEmail?: string): Promise<University> {
+  return request<University>("/api/auth/universities", {
+    method: "POST",
+    body: JSON.stringify({ name, admin_email: adminEmail?.trim() || null })
+  });
+}
+
+export async function createReviewer(email: string, password: string): Promise<ManagedUser> {
+  return request<ManagedUser>("/api/auth/users/create-reviewer", {
+    method: "POST",
+    body: JSON.stringify({ email, password })
+  });
+}
+
+export async function updateUniversityIntegration(webhookUrl: string | null): Promise<University> {
+  return request<University>("/api/auth/universities/integration", {
+    method: "PUT",
+    body: JSON.stringify({ webhook_url: webhookUrl })
+  });
+}
+
+export async function rotateUniversityKey(): Promise<University> {
+  return request<University>("/api/auth/universities/rotate-key", {
+    method: "POST"
+  });
+}
+
+export async function updatePagesPerUnit(universityId: string, pagesPerBillableUnit: number): Promise<University> {
+  return request<University>(`/api/auth/universities/${universityId}/pages-per-unit?pages_per_billable_unit=${pagesPerBillableUnit}`, {
+    method: "PUT"
+  });
+}
+
+export async function deleteUniversity(universityId: string): Promise<void> {
+  await request<void>(`/api/auth/universities/${universityId}`, {
+    method: "DELETE"
+  });
 }

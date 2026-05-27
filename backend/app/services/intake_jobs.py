@@ -22,12 +22,14 @@ from app.services.application_processing import (
     ApplicationProcessingNoDocumentsError,
     ApplicationProcessingService,
 )
+from app.services.application_identity import apply_derived_application_identity
 from app.services.intake_parser import IntakeParserError, get_intake_parser_service
 from app.services.local_auth import ensure_demo_user
 
 
 logger = logging.getLogger(__name__)
 INTAKE_TERMINAL_STATUSES = {"completed", "failed"}
+INTAKE_QUEUE_WATCHDOG_SECONDS = 5.0
 
 
 async def ensure_intake_worker_started(app: FastAPI, settings: AppSettings) -> None:
@@ -100,13 +102,35 @@ async def intake_worker_loop(
     settings: AppSettings,
 ) -> None:
     while True:
-        job_id = await queue.get()
+        try:
+            job_id = await asyncio.wait_for(queue.get(), timeout=INTAKE_QUEUE_WATCHDOG_SECONDS)
+        except TimeoutError:
+            enqueue_queued_jobs(queue=queue, session_factory=session_factory)
+            continue
         try:
             await process_intake_job(job_id=job_id, session_factory=session_factory, settings=settings)
         except Exception:
             logger.exception("Unhandled intake worker error for job %s", job_id)
         finally:
             queue.task_done()
+
+
+def enqueue_queued_jobs(
+    *,
+    queue: asyncio.Queue[str],
+    session_factory: sessionmaker[Session],
+) -> list[str]:
+    with session_factory() as db:
+        queued_job_ids = list(
+            db.scalars(
+                select(IntakeJob.job_id).where(IntakeJob.status == "queued")
+            )
+        )
+    for job_id in queued_job_ids:
+        queue.put_nowait(job_id)
+    if queued_job_ids:
+        logger.info("Requeued %s pending intake job(s).", len(queued_job_ids))
+    return queued_job_ids
 
 
 async def process_intake_job(
@@ -123,17 +147,24 @@ async def process_intake_job(
         job.progress = 35
         job.started_at = datetime.now(timezone.utc)
         job.status_message = "Parsing document."
+        parser_mode = job.parser_mode
         db.commit()
 
-    if settings.intake_mock_processing_delay_seconds and job.parser_mode.strip().lower() == "mock":
+    if settings.intake_mock_processing_delay_seconds and parser_mode.strip().lower() == "mock":
         await asyncio.sleep(settings.intake_mock_processing_delay_seconds)
+
+    if parser_mode.strip().lower() in {"azure", "live"}:
+        await asyncio.to_thread(
+            process_live_intake_job_by_id,
+            job_id=job_id,
+            session_factory=session_factory,
+            settings=settings,
+        )
+        return
 
     with session_factory() as db:
         job = db.get(IntakeJob, job_id)
         if job is None:
-            return
-        if job.parser_mode.strip().lower() in {"azure", "live"}:
-            process_live_intake_job(db=db, job=job, settings=settings)
             return
 
         document = db.get(ApplicationDocument, job.document_id)
@@ -207,6 +238,20 @@ async def process_intake_job(
             },
         )
         db.commit()
+        dispatch_job_webhook(db, job)
+
+
+def process_live_intake_job_by_id(
+    *,
+    job_id: str,
+    session_factory: sessionmaker[Session],
+    settings: AppSettings,
+) -> None:
+    with session_factory() as db:
+        job = db.get(IntakeJob, job_id)
+        if job is None or job.status in INTAKE_TERMINAL_STATUSES:
+            return
+        process_live_intake_job(db=db, job=job, settings=settings)
 
 
 def process_live_intake_job(*, db: Session, job: IntakeJob, settings: AppSettings) -> None:
@@ -258,6 +303,12 @@ def process_live_intake_job(*, db: Session, job: IntakeJob, settings: AppSetting
         )
         return
 
+    identity = apply_derived_application_identity(
+        db=db,
+        application=application,
+        documents=outcome.documents,
+        settings=settings,
+    )
     refreshed_job.status = "completed"
     refreshed_job.progress = 100
     refreshed_job.status_message = "Live processing completed."
@@ -284,9 +335,11 @@ def process_live_intake_job(*, db: Session, job: IntakeJob, settings: AppSetting
             "parser_mode": refreshed_job.parser_mode,
             "processing_status": application.processing_status,
             "section_count": len(refreshed_job.section_analysis or []),
+            "identity_uncertain": identity.uncertain,
         },
     )
     db.commit()
+    dispatch_job_webhook(db, refreshed_job)
 
 
 def live_extracted_record(
@@ -297,18 +350,23 @@ def live_extracted_record(
 ) -> dict[str, Any]:
     application = job.application
     applicant = application.applicant
+    program_applied = application.program_applied or applicant.program_applied
+    intake_term = application.intake_term or applicant.intake_term
     extracted = document.extracted_content
     summary = document.summary
     structured = extracted.structured_extraction if extracted else {}
     return {
         "applicant": {
             "applicant_id": applicant.applicant_id,
+            "student_unique_id": applicant.student_unique_id,
             "name": f"{applicant.first_name} {applicant.last_name}".strip(),
-            "program_applied": applicant.program_applied,
-            "intake_term": applicant.intake_term,
+            "program_applied": program_applied,
+            "intake_term": intake_term,
         },
         "application": {
             "application_id": application.application_id,
+            "program_applied": program_applied,
+            "intake_term": intake_term,
             "status": application.processing_status,
             "review_status": application.review_status,
         },
@@ -386,3 +444,56 @@ def mark_failed(db: Session, job: IntakeJob, message: str, metadata: dict[str, A
         },
     )
     db.commit()
+    dispatch_job_webhook(db, job)
+
+
+def trigger_university_webhook_direct(job: IntakeJob, webhook_url: str) -> None:
+    import urllib.request
+    import json
+    
+    payload = {
+        "event": f"job.{job.status}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": {
+            "job_id": job.job_id,
+            "status": job.status,
+            "status_message": job.status_message,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+            "applicant_id": job.application.applicant_id if job.application and job.application.applicant else None,
+            "application_id": job.application_id,
+            "extracted_record": job.extracted_record,
+            "section_analysis": job.section_analysis,
+            "error_metadata": job.error_metadata,
+        }
+    }
+    
+    def send_post():
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "AdmissionAnalyser-Webhook/1.0"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                logger.info("Webhook for job %s delivered successfully to %s. Status code: %s", job.job_id, webhook_url, response.status)
+        except Exception as exc:
+            logger.error("Failed to deliver webhook for job %s to %s: %s", job.job_id, webhook_url, exc)
+            
+    try:
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, send_post)
+    except RuntimeError:
+        # Fallback if no running loop
+        import threading
+        threading.Thread(target=send_post, daemon=True).start()
+
+
+def dispatch_job_webhook(db: Session, job: IntakeJob) -> None:
+    if not job.application or not job.application.university_id:
+        return
+    from app.models.admissions import University
+    uni = db.get(University, job.application.university_id)
+    if not uni or not uni.webhook_url:
+        return
+    trigger_university_webhook_direct(job, uni.webhook_url)

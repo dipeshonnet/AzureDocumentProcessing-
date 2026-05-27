@@ -31,6 +31,7 @@ from app.services.document_extraction import (
     ExtractionTimeoutError,
     UnsupportedDocumentTypeError,
     get_document_extraction_service,
+    resolved_document_page_count,
 )
 from app.services.structured_extraction import (
     StructuredExtractionDocumentNotFoundError,
@@ -176,7 +177,7 @@ def extract_document(
         db.add(extracted)
         persisted = extracted
 
-    document.page_count = len(persisted.pages)
+    document.page_count = resolved_document_page_count(persisted)
     document.processing_status = "extracted"
     record_audit_log(
         db=db,
@@ -226,9 +227,13 @@ def classify_document(
         ) from exc
 
     old_value = _classification_audit_value(document)
+    existing_metadata = document.classification_metadata or {}
     document.document_type = result.document_type
     document.classification_confidence = result.confidence
-    document.classification_metadata = _classification_metadata(result)
+    document.classification_metadata = {
+        **_preserved_classification_metadata(existing_metadata),
+        **_classification_metadata(result),
+    }
     record_audit_log(
         db=db,
         actor=actor,
@@ -261,6 +266,25 @@ def _classification_metadata(result: ClassificationResult) -> dict:
         "evidence_snippets": result.evidence_snippets,
         "requires_human_review": result.requires_human_review,
         "source": result.source,
+    }
+
+
+def _preserved_classification_metadata(metadata: dict) -> dict:
+    preserved_keys = (
+        "file_size",
+        "file_size_bytes",
+        "content_type",
+        "intake_upload",
+        "rubric_id",
+        "rubric_name",
+        "student_unique_id",
+        "program_applied",
+        "intake_term",
+    )
+    return {
+        key: metadata[key]
+        for key in preserved_keys
+        if key in metadata
     }
 
 

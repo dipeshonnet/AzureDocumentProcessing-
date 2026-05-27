@@ -93,6 +93,8 @@ Use one managed relational database:
 
 Production must not use SQLite. Store `DATABASE_URL` in Key Vault or a platform secret setting. Use SSL and private networking where feasible.
 
+The Rubrics editor uses the same PostgreSQL database through `/api/rubrics`; saved rubrics live in `saved_rubrics`. Keep rubrics in the application database for staging and production unless a later multi-tenant isolation design splits data stores.
+
 ### Application Insights
 
 Create an Application Insights resource and configure:

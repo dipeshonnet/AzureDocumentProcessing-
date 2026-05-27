@@ -11,6 +11,7 @@ from app.config import AppSettings
 
 
 class UserRole(str, Enum):
+    SUPERADMIN = "superadmin"
     ADMIN = "admin"
     ADMISSIONS_REVIEWER = "admissions_reviewer"
     READ_ONLY_AUDITOR = "read_only_auditor"
@@ -24,10 +25,12 @@ class AuthenticatedActor:
 
 
 WRITE_ROLES: tuple[UserRole, ...] = (
+    UserRole.SUPERADMIN,
     UserRole.ADMIN,
     UserRole.ADMISSIONS_REVIEWER,
 )
 READ_ROLES: tuple[UserRole, ...] = (
+    UserRole.SUPERADMIN,
     UserRole.ADMIN,
     UserRole.ADMISSIONS_REVIEWER,
     UserRole.READ_ONLY_AUDITOR,

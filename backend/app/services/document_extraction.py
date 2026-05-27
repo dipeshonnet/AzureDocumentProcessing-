@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from io import BytesIO
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -27,6 +28,8 @@ CONTENT_TYPES_BY_EXTENSION: dict[str, str] = {
     "jpeg": "image/jpeg",
     "png": "image/png",
 }
+
+PDF_PAGE_PATTERN = re.compile(rb"/Type\s*/Page\b(?!s)")
 
 
 class DocumentExtractionError(Exception):
@@ -103,6 +106,15 @@ class BaseDocumentExtractionService:
             raise AzureDocumentExtractionError("Stored document file could not be read.") from exc
 
         result = self.extract_from_file(BytesIO(content), content_type)
+        source_page_count = count_source_document_pages(content, extension)
+        if source_page_count is not None:
+            result = replace(
+                result,
+                extraction_metadata={
+                    **result.extraction_metadata,
+                    "source_page_count": source_page_count,
+                },
+            )
 
         return _result_to_model(document_id=document_id, result=result)
 
@@ -304,6 +316,28 @@ def _parse_analyze_result(result: object) -> ExtractionResult:
     )
     _validate_non_empty_result(parsed)
     return parsed
+
+
+def count_source_document_pages(content: bytes, extension: str) -> int | None:
+    """Best-effort physical page count from the uploaded file bytes."""
+    normalized_extension = extension.lower().lstrip(".")
+    if normalized_extension in {"jpg", "jpeg", "png"}:
+        return 1
+    if normalized_extension == "pdf":
+        page_matches = PDF_PAGE_PATTERN.findall(content)
+        return len(page_matches) if page_matches else None
+    return None
+
+
+def resolved_document_page_count(extracted: ExtractedDocumentContent) -> int:
+    metadata = extracted.extraction_metadata or {}
+    for key in ("source_page_count", "document_page_count", "page_count"):
+        value = metadata.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value > 0 and value.is_integer():
+            return int(value)
+    return len(extracted.pages or [])
 
 
 def _parse_pages(pages: list) -> list[dict]:

@@ -59,6 +59,8 @@ def test_config_check_reports_missing_values_without_secret_values() -> None:
     assert report.ready is False
     assert "DATABASE_URL" in report.missing
     assert "AZURE_OPENAI_API_KEY" in report.missing
+    assert report.database.configured is False
+    assert report.database.required_tables["saved_rubrics"] is False
     assert "secret-openai-key" not in str(serialized)
     assert "secret-doc-key" not in str(serialized)
 
@@ -75,3 +77,6 @@ def test_config_check_endpoint_reports_ready_for_complete_config() -> None:
     assert payload["ready"] is True
     assert payload["missing"] == []
     assert all("value" not in item for item in payload["required"])
+    assert payload["database"]["configured"] is True
+    assert payload["database"]["dialect"] == "sqlite"
+    assert payload["database"]["checked"] is False

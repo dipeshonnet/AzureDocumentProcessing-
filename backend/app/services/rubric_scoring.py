@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import delete, select
@@ -15,13 +15,16 @@ from app.models import (
     ApplicationDocument,
     DocumentSummary,
     ExtractedDocumentContent,
+    IntakeJob,
     RubricCriterionScore,
     RubricScorecard,
+    SavedRubric,
 )
 from app.schemas.rubrics import AdmissionsRubric, RubricCriterion
 from app.services.azure_openai import chat_completion_kwargs, create_azure_openai_chat_client
 from app.services.prompts import load_prompt
 from app.services.rubrics import RubricLoadError, load_default_rubric
+from app.services.rubric_store import get_saved_rubric
 
 
 logger = logging.getLogger(__name__)
@@ -99,6 +102,7 @@ class RubricScoringContext:
 
 @dataclass(frozen=True)
 class RubricScoringOutcome:
+    rubric: AdmissionsRubric
     criteria: list[RubricCriterionScoreResult]
     weighted_score: float
     max_score: float
@@ -124,23 +128,30 @@ class BaseRubricScoringService:
             raise RubricScoringApplicationNotFoundError("Application not found.")
 
         try:
-            rubric = load_default_rubric()
+            rubric = resolve_application_scoring_rubric(db=self.db, application_id=application_id)
         except RubricLoadError as exc:
-            raise RubricScoringServiceError("Default rubric could not be loaded.") from exc
+            raise RubricScoringServiceError("Application rubric could not be loaded.") from exc
 
-        evidence_text = build_application_evidence_text(
+        apply_rubric_section_alignment(db=self.db, application_id=application_id, rubric=rubric)
+
+        full_evidence_text = build_application_evidence_text(
             db=self.db,
             application_id=application_id,
             max_chars=self.settings.rubric_scoring_text_max_chars,
         )
-        protected_attribute_text_present = contains_protected_attribute_text(evidence_text)
+        protected_attribute_text_present = contains_protected_attribute_text(full_evidence_text)
         results = [
             self.score_criterion(
                 RubricScoringContext(
                     application_id=application_id,
                     criterion=criterion,
                     rubric=rubric,
-                    evidence_text=evidence_text,
+                    evidence_text=build_application_evidence_text(
+                        db=self.db,
+                        application_id=application_id,
+                        max_chars=self.settings.rubric_scoring_text_max_chars,
+                        criterion=criterion,
+                    ),
                     protected_attribute_text_present=protected_attribute_text_present,
                 )
             )
@@ -258,7 +269,13 @@ def get_rubric_scoring_service(*, db: Session, settings: AppSettings) -> RubricS
     raise RubricScoringServiceError(f"Unsupported rubric scoring backend: {backend}.")
 
 
-def build_application_evidence_text(*, db: Session, application_id: str, max_chars: int) -> str:
+def build_application_evidence_text(
+    *,
+    db: Session,
+    application_id: str,
+    max_chars: int,
+    criterion: RubricCriterion | None = None,
+) -> str:
     documents = list(
         db.scalars(
             select(ApplicationDocument)
@@ -266,9 +283,27 @@ def build_application_evidence_text(*, db: Session, application_id: str, max_cha
             .order_by(ApplicationDocument.created_at)
         )
     )
+    if criterion is not None:
+        has_rubric_alignments = any(
+            isinstance((document.classification_metadata or {}).get("rubric_section_matches"), list)
+            for document in documents
+        )
+        matching_documents = [
+            document
+            for document in documents
+            if document_matches_rubric_criterion(document=document, criterion_id=criterion.criterion_id)
+        ]
+        if matching_documents:
+            documents = matching_documents
+        elif has_rubric_alignments:
+            return ""
+
     parts: list[str] = []
     for document in documents:
         parts.append(f"Document {document.document_id} ({document.document_type or 'unclassified'}): {document.original_filename}")
+        matches = (document.classification_metadata or {}).get("rubric_section_matches")
+        if matches:
+            parts.append(f"Rubric section matches: {matches}")
         if document.summary:
             parts.append(f"Summary: {document.summary.short_summary}")
             if document.summary.strengths:
@@ -285,6 +320,206 @@ def build_application_evidence_text(*, db: Session, application_id: str, max_cha
             if raw_text:
                 parts.append(f"OCR excerpt: {raw_text[:1200]}")
     return "\n\n".join(parts)[:max_chars]
+
+
+def resolve_application_scoring_rubric(*, db: Session, application_id: str) -> AdmissionsRubric:
+    rubric_id = db.scalar(
+        select(IntakeJob.rubric_id)
+        .where(IntakeJob.application_id == application_id)
+        .order_by(IntakeJob.received_at.desc())
+        .limit(1)
+    )
+    if rubric_id:
+        saved_rubric = get_saved_rubric(db, rubric_id)
+        if saved_rubric is not None:
+            return saved_rubric_to_admissions_rubric(saved_rubric)
+    return load_default_rubric()
+
+
+def saved_rubric_to_admissions_rubric(saved_rubric: SavedRubric) -> AdmissionsRubric:
+    sections = list(saved_rubric.sections or [])
+    section_points = [
+        max(float(section.get("max_points") or 0), 0.0)
+        for section in sections
+    ]
+    total_points = sum(section_points)
+    if total_points <= 0:
+        total_points = float(len(sections) or 1)
+
+    criteria = []
+    for index, section in enumerate(sections):
+        section_id = str(section.get("section_id") or f"section_{index + 1}").strip()
+        name = str(section.get("name") or section_id).strip()
+        max_score = max(float(section.get("max_points") or 0), 1.0)
+        criteria.append(
+            RubricCriterion(
+                criterion_id=section_id,
+                name=name,
+                description=serialize_saved_rubric_section(section),
+                weight=(max_score / total_points) * 100,
+                max_score=max_score,
+                scoring_levels={
+                    1: "Little or no rubric-aligned evidence is present.",
+                    2: "Limited evidence is present but does not satisfy most configured rows.",
+                    3: "Adequate evidence satisfies some configured rows or conditions.",
+                    4: "Strong evidence satisfies most configured rows or conditions.",
+                    5: "Excellent evidence satisfies the strongest applicable configured rows or conditions.",
+                },
+                evidence_required=evidence_required_for_saved_section(section),
+                human_review_triggers=[
+                    "No document is categorized for this rubric section.",
+                    "Evidence is insufficient to apply the configured rows.",
+                    "The rubric row points or conditions are ambiguous.",
+                    "Protected attribute-like text appears and must be ignored for scoring.",
+                ],
+            )
+        )
+
+    return AdmissionsRubric(
+        rubric_id=saved_rubric.rubric_id,
+        name=saved_rubric.name,
+        description=saved_rubric.description or "Saved admissions scoring rubric.",
+        version=saved_rubric.version,
+        criteria=criteria,
+    )
+
+
+def serialize_saved_rubric_section(section: dict[str, Any]) -> str:
+    lines = [
+        f"Section: {section.get('name') or section.get('section_id')}",
+        f"Section description: {section.get('description') or 'No section description provided.'}",
+        f"Section max points: {section.get('max_points') or 0}",
+        "Use the configured rows below as the scoring instructions for this section.",
+    ]
+    for component in section.get("components") or []:
+        lines.append(
+            f"Component: {component.get('name') or component.get('component_id')} "
+            f"(max {component.get('max_points') or 0})"
+        )
+        if component.get("description"):
+            lines.append(f"Component description: {component.get('description')}")
+        for row in component.get("rows") or []:
+            lines.append(
+                "Row: "
+                f"label={row.get('label') or ''}; "
+                f"condition={row.get('condition') or ''}; "
+                f"points={row.get('points') or ''}; "
+                f"notes={row.get('notes') or ''}"
+            )
+    return "\n".join(lines)
+
+
+def evidence_required_for_saved_section(section: dict[str, Any]) -> list[str]:
+    values = [
+        str(section.get("name") or section.get("section_id") or "rubric section evidence")
+    ]
+    for component in section.get("components") or []:
+        name = str(component.get("name") or "").strip()
+        if name:
+            values.append(name)
+    return values[:8]
+
+
+def apply_rubric_section_alignment(*, db: Session, application_id: str, rubric: AdmissionsRubric) -> None:
+    documents = list(
+        db.scalars(
+            select(ApplicationDocument)
+            .where(ApplicationDocument.application_id == application_id)
+            .order_by(ApplicationDocument.created_at)
+        )
+    )
+    for document in documents:
+        metadata = dict(document.classification_metadata or {})
+        metadata["rubric_id"] = rubric.rubric_id
+        metadata["rubric_section_matches"] = rubric_section_matches_for_document(
+            document=document,
+            rubric=rubric,
+        )
+        document.classification_metadata = metadata
+
+
+def rubric_section_matches_for_document(
+    *,
+    document: ApplicationDocument,
+    rubric: AdmissionsRubric,
+) -> list[dict[str, Any]]:
+    document_type = (document.document_type or "").lower()
+    primary_keywords, fallback_keywords = section_keywords_for_document_type(document_type)
+    primary_matches = matching_rubric_criteria(
+        rubric=rubric,
+        keywords=primary_keywords,
+        confidence=0.95,
+        rationale=f"Rubric section directly matches document type '{document_type}'.",
+        evidence_snippets=(document.classification_metadata or {}).get("evidence_snippets") or [],
+    )
+    if primary_matches:
+        return primary_matches
+    return matching_rubric_criteria(
+        rubric=rubric,
+        keywords=fallback_keywords,
+        confidence=0.72,
+        rationale=f"Rubric section is a fallback match for document type '{document_type}'.",
+        evidence_snippets=(document.classification_metadata or {}).get("evidence_snippets") or [],
+    )
+
+
+def section_keywords_for_document_type(document_type: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if document_type == "personal_statement":
+        return ("personal statement", "statement of purpose"), ("short answer", "essay", "writing")
+    if document_type == "recommendation_letter":
+        return ("recommendation", "letter of recommendation", "reference", "lor"), ()
+    if document_type == "transcript":
+        return ("transcript", "gpa", "academic", "coursework", "prerequisite"), ()
+    if document_type == "resume_cv":
+        return ("resume", "cv", "experience", "leadership", "work"), ()
+    if document_type == "test_score_report":
+        return ("test score", "score report", "gre", "gmat", "toefl", "ielts", "sat", "act"), ()
+    if document_type == "application_form":
+        return ("application form", "applicant information", "program"), ()
+    return (), ()
+
+
+def matching_rubric_criteria(
+    *,
+    rubric: AdmissionsRubric,
+    keywords: tuple[str, ...],
+    confidence: float,
+    rationale: str,
+    evidence_snippets: list[str],
+) -> list[dict[str, Any]]:
+    if not keywords:
+        return []
+    matches = []
+    for criterion in rubric.criteria:
+        haystack = " ".join(
+            [
+                criterion.criterion_id,
+                criterion.name,
+                criterion.description,
+            ]
+        ).lower()
+        matched = [keyword for keyword in keywords if keyword in haystack]
+        if matched:
+            matches.append(
+                {
+                    "rubric_section_id": criterion.criterion_id,
+                    "rubric_section_name": criterion.name,
+                    "confidence": confidence,
+                    "rationale": rationale,
+                    "matched_terms": matched,
+                    "evidence": evidence_snippets[:3],
+                }
+            )
+    return matches
+
+
+def document_matches_rubric_criterion(*, document: ApplicationDocument, criterion_id: str) -> bool:
+    matches = (document.classification_metadata or {}).get("rubric_section_matches") or []
+    return any(
+        isinstance(match, dict)
+        and match.get("rubric_section_id") == criterion_id
+        for match in matches
+    )
 
 
 def calculate_scorecard(
@@ -310,6 +545,7 @@ def calculate_scorecard(
         requires_human_review=requires_human_review,
     )
     return RubricScoringOutcome(
+        rubric=rubric,
         criteria=results,
         weighted_score=round(weighted_score, 4),
         max_score=round(max_score, 4),
@@ -428,7 +664,11 @@ def replace_persisted_scores(
             confidence=result.confidence,
             requires_human_review=result.requires_human_review,
             risk_flags=result.risk_flags,
-            scoring_metadata=load_prompt("rubric_scoring").identity(),
+            scoring_metadata={
+                **load_prompt("rubric_scoring").identity(),
+                "rubric_id": rubric.rubric_id,
+                "rubric_name": rubric.name,
+            },
         )
         for result in outcome.criteria
     ]

@@ -319,6 +319,35 @@ textarea {
   border-color: #92a6ad;
 }
 
+.subsection-toggle {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.subsection-toggle span {
+  display: grid;
+  gap: 3px;
+}
+
+.subsection-toggle h3,
+.subsection-toggle small {
+  margin: 0;
+}
+
+.subsection-toggle small {
+  color: #5a6870;
+  font-weight: 400;
+}
+
 .link-button {
   min-height: auto;
   padding: 0;
@@ -490,6 +519,26 @@ textarea {
   color: #8a2f23;
 }
 
+.application-dossier {
+  margin: 0 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.application-dossier h3,
+.dossier-group strong {
+  margin: 0;
+}
+
+.dossier-group {
+  display: grid;
+  gap: 8px;
+}
+
+.dossier-table table {
+  min-width: 520px;
+}
+
 .extracted-text-block,
 .analysis-section {
   margin: 0 16px;
@@ -605,14 +654,6 @@ td {
 .auth-card p {
   margin: 0;
   line-height: 1.45;
-}
-
-.demo-credentials {
-  padding: 9px 10px;
-  border: 1px solid #d8e1e5;
-  border-radius: 8px;
-  background: #f8fafb;
-  color: #42535c;
 }
 
 .notice {
@@ -835,6 +876,112 @@ td {
   line-height: 1.4;
 }
 
+.integrations-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.webhook-heading,
+.api-heading {
+  align-items: center;
+}
+
+.webhook-heading > div,
+.api-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-pill-ready {
+  border-color: #9cd3ca;
+  background: #e8f6f2;
+  color: #15584b;
+}
+
+.status-pill-muted {
+  border-color: #d3dde1;
+  background: #f4f7f8;
+  color: #51616a;
+}
+
+.universities-grid {
+  display: grid;
+  grid-template-columns: minmax(290px, 1fr) minmax(0, 2fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.create-uni-panel {
+  overflow: hidden;
+}
+
+.create-uni-heading {
+  align-items: center;
+}
+
+.create-uni-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.create-uni-form {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.create-uni-help {
+  margin: 0;
+  color: #56666f;
+  font-size: 13px;
+}
+
+.create-uni-submit-wrap {
+  display: flex;
+}
+
+.create-uni-submit {
+  min-height: 40px;
+}
+
+.webhook-form,
+.api-key-body {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.webhook-label {
+  margin: 0;
+}
+
+.webhook-help {
+  margin: 0;
+  color: #56666f;
+  font-size: 13px;
+}
+
+.webhook-help-error {
+  color: #b33d32;
+}
+
+.api-key-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.api-key-input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background: #f8fbfc;
+}
+
+.api-key-empty {
+  margin: 0;
+}
+
 .profile-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -964,6 +1111,37 @@ td {
   margin: 0;
 }
 
+.register-reviewer-panel {
+  overflow: hidden;
+}
+
+.register-reviewer-heading {
+  align-items: center;
+}
+
+.register-reviewer-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.register-reviewer-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(180px, 0.8fr);
+  gap: 14px;
+  align-items: end;
+  padding: 16px;
+}
+
+.register-reviewer-submit-wrap {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.register-reviewer-submit {
+  min-height: 40px;
+  width: 100%;
+}
+
 .user-management-panel {
   box-shadow: 0 16px 34px rgba(43, 64, 75, 0.08);
 }
@@ -982,7 +1160,7 @@ td {
 }
 
 .user-management-table {
-  margin: 0 24px 24px;
+  margin: 0 16px 16px;
   border: 1px solid #d8e1e5;
   border-radius: 8px;
 }
@@ -992,7 +1170,43 @@ td {
 }
 
 .rate-input {
-  max-width: 110px;
+  max-width: 92px;
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+.compact-action-button {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.table-tag {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.table-tag-neutral {
+  border-color: #d3dde1;
+  background: #f4f7f8;
+  color: #51616a;
+}
+
+.table-tag-strong {
+  border-color: #9cd3ca;
+  background: #e8f6f2;
+  color: #15584b;
+}
+
+.table-tag-success {
+  border-color: #9cd3ca;
+  background: #e8f6f2;
+  color: #15584b;
 }
 
 .logo-panel {
@@ -1203,6 +1417,19 @@ td {
   .rubric-row {
     grid-template-columns: 1fr 1fr;
   }
+
+  .register-reviewer-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .universities-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .register-reviewer-submit-wrap {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1227,6 +1454,7 @@ td {
   .profile-grid,
   .billing-hero,
   .billing-metric-grid,
+  .register-reviewer-form,
   .password-form,
   .rubric-editor,
   .rubrics-layout,
@@ -1278,6 +1506,11 @@ td {
     width: 100%;
   }
 
+  .api-key-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .primary-button,
   .secondary-button {
     justify-content: center;
@@ -1312,6 +1545,10 @@ td {
 
   .logo-heading {
     display: grid;
+  }
+
+  .register-reviewer-submit-wrap {
+    justify-content: stretch;
   }
 
   .logo-heading h2 {

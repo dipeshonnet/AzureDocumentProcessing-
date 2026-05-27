@@ -13,6 +13,7 @@ from app.models.admissions import (
     RubricCriterionScore,
     RubricScorecard,
     SavedRubric,
+    University,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "RubricCriterionScore",
     "RubricScorecard",
     "SavedRubric",
+    "University",
 ]

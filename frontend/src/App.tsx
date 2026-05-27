@@ -35,16 +35,22 @@ import {
   fetchRubrics,
   login,
   logout,
-  register,
   setAuthToken,
   updateRubric,
   updateManagedUserBillingRate,
   updateProfileLogo,
-  uploadFileWithProgress
+  uploadFileWithProgress,
+  fetchUniversities,
+  createUniversity,
+  createReviewer,
+  updateUniversityIntegration,
+  rotateUniversityKey,
+  updatePagesPerUnit,
+  deleteUniversity
 } from "./api/client";
-import type { AuthUser, Job, JobStatus, ManagedUser, Rubric, RubricComponent, RubricInput, RubricRow, RubricSection, SectionAnalysis, UploadQueueItem } from "./api/types";
+import type { AuthUser, Job, JobStatus, ManagedUser, Rubric, RubricComponent, RubricInput, RubricRow, RubricSection, SectionAnalysis, UploadQueueItem, University } from "./api/types";
 
-type Page = "intake" | "integrations" | "rubrics" | "users" | "profile";
+type Page = "intake" | "universities" | "integrations" | "rubrics" | "users" | "profile";
 type Notice = { type: "success" | "error"; message: string } | null;
 
 const allowedExtensions = new Set(["pdf", "docx", "txt", "jpg", "jpeg", "png"]);
@@ -54,7 +60,7 @@ const terminalStatuses = new Set<JobStatus>(["completed", "failed"]);
 const fallbackRubrics: Rubric[] = [
   {
     rubric_id: "default_admissions_rubric",
-    name: "Nursing admissions operations rubric",
+    name: "Default Rubric",
     description: "Default local operations rubric. Edit and save copies for each program.",
     version: 1,
     total_points: 100,
@@ -136,7 +142,7 @@ export default function App() {
     <div className="ops-shell">
       <aside className="ops-sidebar" aria-label="Main navigation">
         <a className="ops-brand" href="#/intake" onClick={() => setPage("intake")}>
-          <img src="/admissions-mark.svg" alt="" />
+          <img src={user?.university_logo_data_url || "/admissions-mark.svg"} alt="" style={{ maxHeight: "36px", objectFit: "contain" }} />
           <span>
             <strong>Admission Analyser</strong>
             <small>Secure document workspace</small>
@@ -146,15 +152,24 @@ export default function App() {
           <NavButton page="intake" current={page} onClick={setPage} icon={<FolderInput size={18} />}>
             Intake
           </NavButton>
-          <NavButton page="integrations" current={page} onClick={setPage} icon={<Plug size={18} />}>
-            Integrations
-          </NavButton>
+          {user.role === "superadmin" && (
+            <NavButton page="universities" current={page} onClick={setPage} icon={<Plug size={18} />}>
+              Universities
+            </NavButton>
+          )}
+          {user.role === "admin" && (
+            <NavButton page="integrations" current={page} onClick={setPage} icon={<Plug size={18} />}>
+              Integrations
+            </NavButton>
+          )}
           <NavButton page="rubrics" current={page} onClick={setPage} icon={<ListChecks size={18} />}>
             Rubrics
           </NavButton>
-          <NavButton page="users" current={page} onClick={setPage} icon={<Users size={18} />}>
-            Users
-          </NavButton>
+          {(user.role === "admin" || user.role === "superadmin") && (
+            <NavButton page="users" current={page} onClick={setPage} icon={<Users size={18} />}>
+              Users
+            </NavButton>
+          )}
           <NavButton page="profile" current={page} onClick={setPage} icon={<UserCircle size={18} />}>
             Profile
           </NavButton>
@@ -179,6 +194,7 @@ export default function App() {
         </header>
 
         {page === "intake" ? <IntakePage user={user} rubrics={rubrics} /> : null}
+        {page === "universities" ? <UniversitiesPage /> : null}
         {page === "integrations" ? <IntegrationsPage /> : null}
         {page === "rubrics" ? <RubricsPage rubrics={rubrics} onRubricsChanged={loadRubrics} /> : null}
         {page === "users" ? <UsersPage user={user} /> : null}
@@ -189,11 +205,8 @@ export default function App() {
 }
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
-  const [loginEmail, setLoginEmail] = useState("superadmin");
-  const [loginPassword, setLoginPassword] = useState("EverydayAI");
-  const [registerEmail, setRegisterEmail] = useState("");
-  const [registerPassword, setRegisterPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
   const [saving, setSaving] = useState(false);
 
@@ -212,97 +225,112 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
     }
   }
 
-  async function submitRegistration(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    setNotice(null);
-    try {
-      const response = await register(registerEmail, registerPassword, confirmPassword);
-      setAuthToken(response.token);
-      onAuthenticated(response.user);
-    } catch (error) {
-      setNotice({ type: "error", message: errorMessage(error) });
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
-    <div className="auth-page">
-      <header className="auth-brand">
-        <img src="/admissions-mark.svg" alt="" />
-        <div>
-          <strong>Admission Analyser</strong>
-          <span>Secure document intake for admissions operations teams.</span>
+    <div className="auth-page" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", backgroundColor: "#f8fafc" }}>
+      <div style={{ width: "100%", maxWidth: "420px", padding: "20px" }}>
+        
+        {/* Branding header centered right above the login card */}
+        <div style={{ textAlign: "center", marginBottom: "24px" }}>
+          <img src="/admissions-mark.svg" alt="" style={{ height: "48px", marginBottom: "16px" }} />
+          <h2 style={{ fontSize: "28px", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.5px", margin: "0 0 6px" }}>
+            Admission Analyser
+          </h2>
+          <p style={{ fontSize: "14px", color: "#64748b", margin: 0 }}>
+            Secure document intake for admissions teams
+          </p>
         </div>
-      </header>
-      {notice ? <NoticeBanner notice={notice} /> : null}
-      <div className="auth-grid">
-        <form className="auth-card" onSubmit={(event) => void submitLogin(event)}>
-          <p className="eyebrow">Existing user</p>
-          <h1>Sign in</h1>
-          <p className="muted">Use the local demo account or your registered workspace credentials.</p>
-          <label>
-            Email
-            <input value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} autoComplete="username" />
-          </label>
-          <label>
-            Password
-            <input
-              value={loginPassword}
-              onChange={(event) => setLoginPassword(event.target.value)}
-              type="password"
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <div className="demo-credentials">
-            Demo: <strong>superadmin</strong> / <strong>EverydayAI</strong>
-          </div>
-          <button className="primary-button" type="submit" disabled={saving}>
-            Sign in
-          </button>
-        </form>
 
-        <form className="auth-card" onSubmit={(event) => void submitRegistration(event)}>
-          <p className="eyebrow">New user</p>
-          <h2>Register</h2>
-          <p className="muted">Registration creates a local admissions reviewer account for development.</p>
-          <label>
-            Email
-            <input value={registerEmail} onChange={(event) => setRegisterEmail(event.target.value)} autoComplete="username" />
-          </label>
-          <label>
-            Password
-            <input
-              value={registerPassword}
-              onChange={(event) => setRegisterPassword(event.target.value)}
-              type="password"
-              autoComplete="new-password"
-            />
-          </label>
-          <label>
-            Confirm password
-            <input
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              type="password"
-              autoComplete="new-password"
-            />
-          </label>
-          <button className="secondary-button" type="submit" disabled={saving}>
-            Create account
-          </button>
-        </form>
+        {notice ? <NoticeBanner notice={notice} /> : null}
+
+        {/* Cohesive, Centered, Premium Login Card */}
+        <div className="auth-card" style={{ backgroundColor: "#ffffff", padding: "32px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", border: "1px solid #e2e8f0" }}>
+          <form onSubmit={(event) => void submitLogin(event)} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            <div>
+              <h3 style={{ fontSize: "18px", fontWeight: 600, color: "#0f172a", margin: "0 0 4px" }}>
+                Sign in to your account
+              </h3>
+              <p style={{ fontSize: "13px", color: "#64748b", margin: 0 }}>
+                Enter your registered credentials below
+              </p>
+            </div>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px", fontWeight: 600, color: "#334155" }}>
+              Email or username
+              <input 
+                type="text"
+                value={loginEmail} 
+                onChange={(event) => setLoginEmail(event.target.value)} 
+                autoComplete="username" 
+                required 
+                placeholder="you@university.edu or superadmin"
+                style={{ 
+                  width: "100%", 
+                  padding: "10px 12px", 
+                  borderRadius: "6px", 
+                  border: "1px solid #cbd5e1", 
+                  fontSize: "14px", 
+                  color: "#0f172a", 
+                  backgroundColor: "#ffffff", 
+                  transition: "border-color 0.15s ease",
+                  outline: "none"
+                }}
+              />
+            </label>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px", fontWeight: 600, color: "#334155" }}>
+              Password
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+                placeholder="••••••••"
+                style={{ 
+                  width: "100%", 
+                  padding: "10px 12px", 
+                  borderRadius: "6px", 
+                  border: "1px solid #cbd5e1", 
+                  fontSize: "14px", 
+                  color: "#0f172a", 
+                  backgroundColor: "#ffffff", 
+                  transition: "border-color 0.15s ease",
+                  outline: "none"
+                }}
+              />
+            </label>
+
+            <button 
+              className="primary-button" 
+              type="submit" 
+              disabled={saving} 
+              style={{ 
+                width: "100%", 
+                padding: "11px", 
+                borderRadius: "6px", 
+                fontSize: "14px", 
+                fontWeight: 600, 
+                backgroundColor: "#0d6a5e", 
+                color: "#ffffff", 
+                border: "none", 
+                cursor: "pointer", 
+                display: "flex", 
+                justifyContent: "center", 
+                alignItems: "center",
+                transition: "background-color 0.15s ease"
+              }}
+            >
+              {saving ? "Signing in..." : "Sign in"}
+            </button>
+          </form>
+        </div>
+
       </div>
     </div>
   );
 }
 
 function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
-  const [applicantName, setApplicantName] = useState("Jordan Lee");
-  const [applicantId, setApplicantId] = useState("");
-  const [program, setProgram] = useState("MSc Data Science");
   const [selectedRubricId, setSelectedRubricId] = useState(rubrics[0]?.rubric_id ?? fallbackRubrics[0].rubric_id);
   const [queueItems, setQueueItems] = useState<UploadQueueItem[]>([]);
   const [recentJobs, setRecentJobs] = useState<Job[]>([]);
@@ -311,6 +339,9 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
   const [notice, setNotice] = useState<Notice>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStarted, setUploadStarted] = useState(false);
+  const [studentUniqueId, setStudentUniqueId] = useState("");
+  const [programApplied, setProgramApplied] = useState("");
+  const [intakeTerm, setIntakeTerm] = useState("Current intake");
   const applicationIdRef = useRef<string | undefined>(undefined);
 
   const terminalCount = queueItems.filter((item) => terminalStatuses.has(item.status)).length;
@@ -372,7 +403,9 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
       try {
         mergeJobs(await fetchJobsStatus(pendingIds));
       } catch (error) {
-        setNotice({ type: "error", message: errorMessage(error) });
+        if (!isRequestTimeout(error)) {
+          setNotice({ type: "error", message: errorMessage(error) });
+        }
       }
     };
     void poll();
@@ -404,6 +437,14 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
       setNotice({ type: "error", message: "Select at least one supported admissions file." });
       return;
     }
+    if (!studentUniqueId.trim()) {
+      setNotice({ type: "error", message: "Enter the student ID before uploading documents." });
+      return;
+    }
+    if (!programApplied.trim()) {
+      setNotice({ type: "error", message: "Enter the application program before uploading documents." });
+      return;
+    }
     setUploading(true);
     setUploadStarted(true);
     setNotice(null);
@@ -421,10 +462,9 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
           {
             file: item.file,
             rubric_id: selectedRubricId,
-            applicant_name: applicantName,
-            applicant_id: applicantId,
-            program_applied: program,
-            intake_term: "Current intake",
+            student_unique_id: studentUniqueId,
+            program_applied: programApplied,
+            intake_term: intakeTerm,
             application_id: applicationId
           },
           (progress) =>
@@ -478,6 +518,12 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
       .filter((job): job is Job => Boolean(job))
       .find((job) => terminalStatuses.has(job.status)) ??
     null;
+  const latestReviewRubric =
+    (latestReviewJob ? rubrics.find((rubric) => rubric.rubric_id === latestReviewJob.rubric_id) : null) ??
+    fallbackRubrics[0];
+  const latestReviewApplicationJobs = latestReviewJob
+    ? jobsForApplication(latestReviewJob.application_id, recentJobs, queueItems)
+    : [];
 
   return (
     <div className="intake-layout">
@@ -495,16 +541,33 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
 
         <div className="intake-form-grid">
           <label>
-            Applicant name
-            <input value={applicantName} onChange={(event) => setApplicantName(event.target.value)} disabled={uploading} />
+            Student ID
+            <input
+              value={studentUniqueId}
+              onChange={(event) => setStudentUniqueId(event.target.value)}
+              placeholder="Unique student or SIS ID"
+              disabled={uploading || uploadStarted}
+              required
+            />
           </label>
           <label>
-            Applicant ID optional
-            <input value={applicantId} onChange={(event) => setApplicantId(event.target.value)} disabled={uploading} />
+            Application program
+            <input
+              value={programApplied}
+              onChange={(event) => setProgramApplied(event.target.value)}
+              placeholder="Program for this application"
+              disabled={uploading || uploadStarted}
+              required
+            />
           </label>
           <label>
-            Program
-            <input value={program} onChange={(event) => setProgram(event.target.value)} disabled={uploading} />
+            Intake term
+            <input
+              value={intakeTerm}
+              onChange={(event) => setIntakeTerm(event.target.value)}
+              placeholder="Current intake"
+              disabled={uploading || uploadStarted}
+            />
           </label>
           <label>
             Rubric
@@ -557,9 +620,10 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
                     setQueueItems([]);
                     setSelectedJob(null);
                     setReviewOpen(false);
+                    setUploadStarted(false);
                     applicationIdRef.current = undefined;
                   }}
-                  disabled={uploading || uploadStarted}
+                  disabled={uploading}
                 >
                   <Trash2 size={16} aria-hidden="true" />
                   Clear
@@ -604,6 +668,8 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
 
       <LatestReview
         job={latestReviewJob}
+        applicationJobs={latestReviewApplicationJobs}
+        rubric={latestReviewRubric}
         open={reviewOpen}
         onToggle={() => setReviewOpen((current) => !current)}
         onDownload={async (job) => {
@@ -623,30 +689,59 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
 
 function LatestReview({
   job,
+  applicationJobs,
+  rubric,
   open,
   onToggle,
   onDownload
 }: {
   job: Job | null;
+  applicationJobs: Job[];
+  rubric: Rubric;
   open: boolean;
   onToggle: () => void;
   onDownload: (job: Job) => Promise<void>;
 }) {
+  const [extractedTextOpen, setExtractedTextOpen] = useState(false);
+
+  useEffect(() => {
+    setExtractedTextOpen(false);
+  }, [job?.job_id]);
+
   return (
     <section className="panel latest-review">
-      <button className="section-toggle" type="button" onClick={onToggle} disabled={!job}>
-        <span>
+      <div
+        className="panel-heading"
+        style={{
+          cursor: job ? "pointer" : "default",
+          borderBottom: open && job ? "1px solid #edf1f3" : "none"
+        }}
+        onClick={job ? onToggle : undefined}
+      >
+        <div>
           <h2>Latest intake review</h2>
-          <small>{job ? `${job.document_name} - ${job.status_message}` : "Select or finish a job to inspect the extracted record."}</small>
-        </span>
-        <strong>{open && job ? "Collapse" : "Expand"}</strong>
-      </button>
+          <p>{job ? `${job.document_name} - ${job.status_message}` : "Select or finish a job to inspect the extracted record."}</p>
+        </div>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          disabled={!job}
+        >
+          {open && job ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+          {open && job ? "Collapse" : "Expand"}
+        </button>
+      </div>
       {open && job ? (
         <div className="review-body">
           <div className="review-summary-grid">
             <SummaryTile label="Applicant name" value={job.applicant_name} />
-            <SummaryTile label="Applicant ID" value={job.applicant_id} />
+            <SummaryTile label="Student ID" value={job.student_unique_id || job.applicant_id} />
             <SummaryTile label="Application program" value={job.program_applied} />
+            <SummaryTile label="Intake term" value={job.intake_term} />
             <SummaryTile label="Application status" value={job.application_status} />
             <SummaryTile label="Document name" value={job.document_name} />
             <SummaryTile label="File size" value={job.file_size ? formatBytes(job.file_size) : "Unknown"} />
@@ -655,6 +750,7 @@ function LatestReview({
             <SummaryTile label="Document type" value={humanize(job.document_type)} />
             <SummaryTile label="Parsing engine" value={job.parser_mode} />
           </div>
+          <ApplicationDossier jobs={applicationJobs.length ? applicationJobs : [job]} />
           <div className={`status-message status-message-${job.status}`}>
             {job.status_message}
           </div>
@@ -665,8 +761,14 @@ function LatestReview({
             </button>
           </div>
           <div className="extracted-text-block">
-            <h3>Extracted admissions text</h3>
-            <pre>{job.extracted_text || "No extracted text is available yet."}</pre>
+            <button className="subsection-toggle" type="button" onClick={() => setExtractedTextOpen((current) => !current)}>
+              <span>
+                <h3>Extracted admissions text</h3>
+                <small>{job.extracted_text ? "OCR and parsed source text from the selected document." : "No extracted text is available yet."}</small>
+              </span>
+              <strong>{extractedTextOpen ? "Collapse" : "Expand"}</strong>
+            </button>
+            {extractedTextOpen ? <pre>{job.extracted_text || "No extracted text is available yet."}</pre> : null}
           </div>
           <div className="analysis-section">
             <h3>Admissions section alignment</h3>
@@ -677,7 +779,7 @@ function LatestReview({
               ))}
             </div>
             <div className="analysis-card-grid">
-              {ensureDefaultSections(job.section_analysis).map((section) => (
+              {ensureDefaultSections(job.section_analysis, rubric).map((section) => (
                 <article className="analysis-card" key={section.section_id}>
                   <div>
                     <h4>{section.label}</h4>
@@ -696,52 +798,119 @@ function LatestReview({
 }
 
 function RecentActivity({ jobs, onSelect }: { jobs: Job[]; onSelect: (job: Job) => void }) {
+  const [open, setOpen] = useState(true);
+
   return (
     <section className="panel recent-activity">
-      <div className="panel-heading">
+      <div
+        className="panel-heading"
+        style={{
+          cursor: "pointer",
+          borderBottom: open ? "1px solid #edf1f3" : "none"
+        }}
+        onClick={() => setOpen((current) => !current)}
+      >
         <div>
           <h2>Recent activity</h2>
           <p>Latest intake jobs from the local backend.</p>
         </div>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((current) => !current);
+          }}
+        >
+          {open ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+          {open ? "Collapse" : "Expand"}
+        </button>
       </div>
-      <div className="responsive-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Applicant</th>
-              <th>Program</th>
-              <th>Document</th>
-              <th>Pipeline status</th>
-              <th>Received date</th>
-              <th>Record</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.length ? (
-              jobs.map((job) => (
-                <tr key={job.job_id}>
-                  <td>{job.applicant_name}</td>
-                  <td>{job.program_applied}</td>
-                  <td>
-                    <button className="link-button" type="button" onClick={() => onSelect(job)}>
-                      {job.document_name}
-                    </button>
-                  </td>
-                  <td><StatusPill status={job.status} /></td>
-                  <td>{formatDateTime(job.received_at)}</td>
-                  <td>{job.status === "completed" ? "Available" : "Pending"}</td>
-                </tr>
-              ))
-            ) : (
+      {open ? (
+        <div className="responsive-table">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={6}>No intake jobs yet.</td>
+                <th>Applicant</th>
+                <th>Program</th>
+                <th>Document</th>
+                <th>Pipeline status</th>
+                <th>Received date</th>
+                <th>Record</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {jobs.length ? (
+                jobs.map((job) => (
+                  <tr key={job.job_id}>
+                    <td>{job.applicant_name}</td>
+                    <td>{job.program_applied}</td>
+                    <td>
+                      <button className="link-button" type="button" onClick={() => onSelect(job)}>
+                        {job.document_name}
+                      </button>
+                    </td>
+                    <td><StatusPill status={job.status} /></td>
+                    <td>{formatDateTime(job.received_at)}</td>
+                    <td>{job.status === "completed" ? "Available" : "Pending"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6}>No intake jobs yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </section>
   );
+}
+
+function ApplicationDossier({ jobs }: { jobs: Job[] }) {
+  const grouped = groupJobsByDocumentType(jobs);
+  return (
+    <div className="application-dossier">
+      <h3>Application dossier</h3>
+      {grouped.map((group) => (
+        <div className="dossier-group" key={group.type}>
+          <strong>{humanize(group.type)}</strong>
+          <div className="responsive-table dossier-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Document</th>
+                  <th>Pages</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.jobs.map((job) => (
+                  <tr key={job.job_id}>
+                    <td>{job.document_name}</td>
+                    <td>{job.page_count ?? "Pending"}</td>
+                    <td><StatusPill status={job.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function groupJobsByDocumentType(jobs: Job[]): { type: string; jobs: Job[] }[] {
+  const groups = new Map<string, Job[]>();
+  for (const job of jobs) {
+    const type = job.document_type || "pending_classification";
+    groups.set(type, [...(groups.get(type) ?? []), job]);
+  }
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([type, groupJobs]) => ({ type, jobs: groupJobs }));
 }
 
 function RubricsPage({
@@ -1262,11 +1431,389 @@ function newRow(): RubricRow {
 }
 
 function IntegrationsPage() {
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [copied, setCopied] = useState(false);
+  
+  useEffect(() => {
+    fetchUniversities()
+      .then((unis) => {
+        if (unis && unis.length > 0) {
+          setWebhookUrl(unis[0].webhook_url || "");
+          setApiKey(unis[0].api_key || "");
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load integrations", err);
+      });
+  }, []);
+  
+  const handleSaveWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setNotice(null);
+    try {
+      const res = await updateUniversityIntegration(webhookUrl || null);
+      setWebhookUrl(res.webhook_url || "");
+      setNotice({ type: "success", message: "Webhook settings saved successfully!" });
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  
+  const handleRotateKey = async () => {
+    if (!window.confirm("Are you sure you want to rotate your API key? All applications using the old key will be disconnected.")) {
+      return;
+    }
+    setRotating(true);
+    setNotice(null);
+    try {
+      const res = await rotateUniversityKey();
+      setApiKey(res.api_key || "");
+      setNotice({ type: "success", message: "API Key rotated successfully!" });
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    } finally {
+      setRotating(false);
+    }
+  };
+  
+  const copyToClipboard = () => {
+    void navigator.clipboard.writeText(apiKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const normalizedWebhookUrl = webhookUrl.trim();
+  const webhookConfigured = normalizedWebhookUrl.length > 0;
+  const webhookUrlIsValid = !webhookConfigured || /^https?:\/\/\S+$/i.test(normalizedWebhookUrl);
+  
   return (
-    <section className="panel integration-grid">
-      <IntegrationCard title="Google Drive" status="Placeholder" description="Connect admissions folders in a future release." />
-      <IntegrationCard title="Future sources" status="Planned" description="Mailbox, SIS, and partner upload feeds can be added behind the same intake job API." />
-    </section>
+    <div className="integrations-layout">
+      {notice ? <NoticeBanner notice={notice} /> : null}
+      
+      <section className="panel webhook-panel">
+        <div className="panel-heading webhook-heading">
+          <span className="billing-metric-icon">
+            <Plug size={20} />
+          </span>
+          <div>
+            <p className="eyebrow">Webhooks</p>
+            <h2>Webhook Notifications</h2>
+            <p>Configure a custom HTTP POST webhook URL to receive real-time JSON updates when document parsing completes.</p>
+          </div>
+          <span className={`status-pill ${webhookConfigured ? "status-pill-ready" : "status-pill-muted"}`}>
+            {webhookConfigured ? "Configured" : "Not configured"}
+          </span>
+        </div>
+        
+        <form onSubmit={(e) => void handleSaveWebhook(e)} className="webhook-form">
+          <label className="webhook-label">
+            Webhook Destination URL
+            <input
+              type="url"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder="https://your-server.com/webhooks/admissions"
+              aria-invalid={!webhookUrlIsValid}
+            />
+          </label>
+          <p className={`webhook-help ${webhookUrlIsValid ? "" : "webhook-help-error"}`}>
+            {webhookUrlIsValid ? "Leave empty to disable webhook notifications." : "Enter a valid URL starting with http:// or https://."}
+          </p>
+          <div className="button-row">
+            <button className="primary-button" type="submit" disabled={saving || !webhookUrlIsValid}>
+              <Save size={16} />
+              Save Webhook
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={saving || webhookUrl.length === 0}
+              onClick={() => setWebhookUrl("")}
+            >
+              <Trash2 size={16} />
+              Clear
+            </button>
+          </div>
+        </form>
+      </section>
+      
+      <section className="panel api-panel">
+        <div className="panel-heading api-heading">
+          <span className="billing-metric-icon">
+            <KeyRound size={20} />
+          </span>
+          <div>
+            <p className="eyebrow">Developer API</p>
+            <h2>Programmatic API Credentials</h2>
+            <p>Use your secure API Key to programmatically upload transcripts, program options, and fetch extraction status.</p>
+          </div>
+          <span className={`status-pill ${apiKey ? "status-pill-ready" : "status-pill-muted"}`}>
+            {apiKey ? "Key available" : "No key"}
+          </span>
+        </div>
+        
+        <div className="api-key-body">
+          {apiKey ? (
+            <div className="api-key-row">
+              <input
+                type="text"
+                value={apiKey}
+                readOnly
+                className="api-key-input"
+              />
+              <button className="secondary-button" onClick={copyToClipboard}>
+                <Copy size={16} />
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          ) : (
+            <p className="muted api-key-empty">No API Key generated yet.</p>
+          )}
+          
+          <button className="secondary-button" onClick={() => void handleRotateKey()} disabled={rotating}>
+            <KeyRound size={16} />
+            {apiKey ? "Rotate API Key" : "Generate API Key"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function UniversitiesPage() {
+  const [unis, setUnis] = useState<University[]>([]);
+  const [newUniName, setNewUniName] = useState("");
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [unitDrafts, setUnitDrafts] = useState<Record<string, string>>({});
+  const [updatingUniId, setUpdatingUniId] = useState<string | null>(null);
+  const [newUniCreds, setNewUniCreds] = useState<{ email: string; pass: string } | null>(null);
+  
+  const loadUnis = useCallback(async () => {
+    try {
+      const list = await fetchUniversities();
+      setUnis(list);
+      setUnitDrafts(
+        Object.fromEntries(
+          list.map((uni) => [uni.university_id, String(uni.pages_per_billable_unit)])
+        )
+      );
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    }
+  }, []);
+  
+  useEffect(() => {
+    void loadUnis();
+  }, [loadUnis]);
+  
+  const handleCreateUni = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUniName.trim()) return;
+    setSaving(true);
+    setNotice(null);
+    setNewUniCreds(null);
+    try {
+      const requestedAdminEmail = newAdminEmail.trim();
+      const res = await createUniversity(newUniName.trim(), requestedAdminEmail || undefined);
+      setUnis(current => [...current, res]);
+      setUnitDrafts(current => ({ ...current, [res.university_id]: String(res.pages_per_billable_unit) }));
+      setNewUniName("");
+      setNewAdminEmail("");
+      setNotice({ type: "success", message: `Successfully registered university: ${res.name}!` });
+      
+      const cleanName = res.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      setNewUniCreds({
+        email: requestedAdminEmail || `admin@${cleanName}.edu`,
+        pass: "EverydayAI"
+      });
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  
+  const handleSavePages = async (uni: University) => {
+    const pages = Number(unitDrafts[uni.university_id]);
+    if (!Number.isInteger(pages) || pages <= 0) {
+      setNotice({ type: "error", message: "Enter a valid positive integer for pages." });
+      return;
+    }
+    setUpdatingUniId(uni.university_id);
+    setNotice(null);
+    try {
+      const updated = await updatePagesPerUnit(uni.university_id, pages);
+      setUnis((current) => current.map((candidate) => (candidate.university_id === updated.university_id ? updated : candidate)));
+      setNotice({ type: "success", message: `Updated billing unit pages for ${updated.name}.` });
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    } finally {
+      setUpdatingUniId(null);
+    }
+  };
+
+  const handleDeleteUni = async (uni: University) => {
+    if (!window.confirm(`Are you absolutely sure you want to delete ${uni.name}? All associated reviewers, rubrics, jobs, and documents will be permanently deleted.`)) {
+      return;
+    }
+    setUpdatingUniId(uni.university_id);
+    setNotice(null);
+    try {
+      await deleteUniversity(uni.university_id);
+      setUnis(current => current.filter(u => u.university_id !== uni.university_id));
+      setNotice({ type: "success", message: `Successfully deleted university: ${uni.name}.` });
+    } catch (err) {
+      setNotice({ type: "error", message: errorMessage(err) });
+    } finally {
+      setUpdatingUniId(null);
+    }
+  };
+  
+  return (
+    <div className="universities-layout" style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {notice ? <NoticeBanner notice={notice} /> : null}
+      
+      {newUniCreds && (
+        <div className="notice notice-success" style={{ padding: "15px", borderRadius: "8px", border: "1px solid #c3e6cb", backgroundColor: "#d4edda", color: "#155724" }}>
+          <strong style={{ fontSize: "1.1em", display: "block", marginBottom: "8px" }}>University Created Successfully!</strong>
+          <p style={{ margin: "0 0 5px" }}>Initial Admin User Provisioned:</p>
+          <ul style={{ marginLeft: "20px", marginTop: "5px", padding: 0 }}>
+            <li><strong>Email:</strong> {newUniCreds.email}</li>
+            <li><strong>Password:</strong> {newUniCreds.pass}</li>
+          </ul>
+          <p style={{ marginTop: "8px", fontSize: "0.88em", color: "#245831", marginBlockEnd: 0 }}>Please share these credentials securely with the university admin.</p>
+        </div>
+      )}
+      
+      <div className="universities-grid">
+        <section className="panel create-uni-panel">
+          <div className="panel-heading create-uni-heading">
+            <span className="billing-metric-icon">
+              <Plus size={20} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="eyebrow">Administration</p>
+              <h2>Create Tenant</h2>
+              <p>Add a new university to the workspace.</p>
+            </div>
+            <span className="status-pill status-pill-muted">Workspace setup</span>
+          </div>
+          
+          <form onSubmit={(e) => void handleCreateUni(e)} className="create-uni-form">
+            <label>
+              University Name
+              <input
+                type="text"
+                required
+                value={newUniName}
+                onChange={(e) => setNewUniName(e.target.value)}
+                placeholder="e.g., Stanford University"
+                autoComplete="organization"
+                minLength={2}
+              />
+            </label>
+            <label>
+              Provisioned Admin Email
+              <input
+                type="text"
+                value={newAdminEmail}
+                onChange={(e) => setNewAdminEmail(e.target.value)}
+                placeholder="admin@university.edu (optional)"
+                autoComplete="email"
+              />
+            </label>
+            <p className="create-uni-help">This creates the tenant and provisions its initial admin account.</p>
+            <div className="create-uni-submit-wrap">
+              <button className="primary-button create-uni-submit" type="submit" disabled={saving || !newUniName.trim()}>
+                <Plus size={16} />
+                Register University
+              </button>
+            </div>
+          </form>
+        </section>
+        
+        <section className="panel unis-list-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Universities</h2>
+              <p>View tenant configuration, integrations, and billing unit rates.</p>
+            </div>
+          </div>
+          
+          <div className="responsive-table" style={{ marginTop: "20px" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Pages / Billable Unit</th>
+                  <th>API Key Status</th>
+                  <th>Webhook</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unis.length ? (
+                  unis.map((uni) => (
+                    <tr key={uni.university_id}>
+                      <td><strong>{uni.name}</strong></td>
+                      <td>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={unitDrafts[uni.university_id] ?? String(uni.pages_per_billable_unit)}
+                          onChange={(e) => setUnitDrafts(current => ({ ...current, [uni.university_id]: e.target.value }))}
+                          style={{ width: "80px", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", textAlign: "center" }}
+                        />
+                      </td>
+                      <td>{uni.api_key ? "Active" : "None"}</td>
+                      <td>{uni.webhook_url ? "Configured" : "None"}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <button
+                            className="secondary-button"
+                            onClick={() => void handleSavePages(uni)}
+                            disabled={updatingUniId === uni.university_id}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "5px 10px" }}
+                          >
+                            <Save size={14} />
+                            Save
+                          </button>
+                          {uni.name !== "Default University" && (
+                            <button
+                              className="secondary-button"
+                              onClick={() => void handleDeleteUni(uni)}
+                              disabled={updatingUniId === uni.university_id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "5px 10px", borderColor: "#f5c6cb", color: "#721c24", backgroundColor: "#f8d7da" }}
+                            >
+                              <Trash2 size={14} />
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5}>No registered universities found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -1360,7 +1907,7 @@ function ProfilePage({ user }: { user: AuthUser }) {
     .filter((job) => job.status === "completed")
     .map((job) => {
       const pages = pageCountForJob(job);
-      const units = billableUnitsForPages(pages);
+      const units = billableUnitsForPages(pages, user.pages_per_billable_unit);
       return {
         job,
         pages,
@@ -1390,7 +1937,7 @@ function ProfilePage({ user }: { user: AuthUser }) {
         <div className="billing-metric-grid">
           <BillingMetricCard icon={<FileText size={20} />} label="Documents processed" value={String(documentsProcessed)} />
           <BillingMetricCard icon={<LayoutDashboard size={20} />} label="Pages processed" value={String(pagesProcessed)} />
-          <BillingMetricCard icon={<ListChecks size={20} />} label="Billable units" value={String(billableUnits)} />
+          <BillingMetricCard icon={<ListChecks size={20} />} label={`Billable units (${user.pages_per_billable_unit || 10} pages per unit)`} value={String(billableUnits)} />
           <BillingMetricCard icon={<DollarSign size={20} />} label="Rate" value={`${formatRate(billingRate)} per document unit`} highlighted />
         </div>
 
@@ -1557,8 +2104,14 @@ function UsersPage({ user }: { user: AuthUser }) {
   const [notice, setNotice] = useState<Notice>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
 
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [regNotice, setRegNotice] = useState<Notice>(null);
+  const [regSaving, setRegSaving] = useState(false);
+  const reviewerCount = users.filter((managedUser) => managedUser.role === "admissions_reviewer").length;
+
   useEffect(() => {
-    if (user.role !== "admin") {
+    if (user.role !== "admin" && user.role !== "superadmin") {
       return;
     }
     fetchManagedUsers()
@@ -1593,7 +2146,25 @@ function UsersPage({ user }: { user: AuthUser }) {
     }
   }
 
-  if (user.role !== "admin") {
+  async function handleRegisterReviewer(e: React.FormEvent) {
+    e.preventDefault();
+    setRegSaving(true);
+    setRegNotice(null);
+    try {
+      const reviewer = await createReviewer(newEmail, newPassword);
+      setUsers(current => [...current, reviewer]);
+      setRateDrafts(current => ({ ...current, [reviewer.user_id]: String(reviewer.billing_rate_per_unit) }));
+      setNewEmail("");
+      setNewPassword("");
+      setRegNotice({ type: "success", message: `Successfully registered reviewer: ${reviewer.email}` });
+    } catch (error) {
+      setRegNotice({ type: "error", message: errorMessage(error) });
+    } finally {
+      setRegSaving(false);
+    }
+  }
+
+  if (user.role !== "admin" && user.role !== "superadmin") {
     return (
       <section className="panel empty-panel">
         <AlertTriangle size={22} aria-hidden="true" />
@@ -1605,6 +2176,57 @@ function UsersPage({ user }: { user: AuthUser }) {
   return (
     <div className="users-layout">
       {notice ? <NoticeBanner notice={notice} /> : null}
+
+      {user.role === "admin" && (
+        <section className="panel register-reviewer-panel">
+          <div className="panel-heading register-reviewer-heading">
+            <span className="billing-metric-icon">
+              <Plus size={20} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="eyebrow">Administration</p>
+              <h2>Register Reviewer</h2>
+              <p>Create a new admissions reviewer account associated with your university.</p>
+            </div>
+            <span className="status-pill status-pill-ready">
+              {reviewerCount} reviewer{reviewerCount === 1 ? "" : "s"}
+            </span>
+          </div>
+          {regNotice ? <NoticeBanner notice={regNotice} /> : null}
+          <form onSubmit={(e) => void handleRegisterReviewer(e)} className="register-reviewer-form">
+            <label>
+              Reviewer Email
+              <input
+                type="email"
+                required
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="reviewer@university.edu"
+                autoComplete="email"
+              />
+            </label>
+            <label>
+              Reviewer Password
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="new-password"
+                minLength={8}
+              />
+            </label>
+            <div className="register-reviewer-submit-wrap">
+              <button className="primary-button register-reviewer-submit" type="submit" disabled={regSaving}>
+                <Plus size={16} />
+                Register Reviewer
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
       <section className="panel user-management-panel">
         <div className="panel-heading user-management-heading">
           <span className="billing-metric-icon">
@@ -1615,6 +2237,7 @@ function UsersPage({ user }: { user: AuthUser }) {
             <h2>User management</h2>
             <p>Review registered users, verification status, usage, rates, and last sign-in activity.</p>
           </div>
+          <span className="status-pill status-pill-muted">{users.length} total users</span>
         </div>
         <div className="responsive-table user-management-table">
           <table>
@@ -1636,35 +2259,49 @@ function UsersPage({ user }: { user: AuthUser }) {
                 users.map((managedUser) => (
                   <tr key={managedUser.user_id}>
                     <td>{managedUser.email}</td>
-                    <td>{displayUserRole(managedUser.role)}</td>
-                    <td>{humanize(managedUser.verification_status)}</td>
+                    <td>
+                      <span className={`table-tag ${managedUser.role === "admissions_reviewer" ? "table-tag-neutral" : "table-tag-strong"}`}>
+                        {displayUserRole(managedUser.role)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`table-tag ${managedUser.verification_status === "verified" ? "table-tag-success" : "table-tag-neutral"}`}>
+                        {humanize(managedUser.verification_status)}
+                      </span>
+                    </td>
                     <td>{managedUser.document_count}</td>
                     <td>{managedUser.rubric_count}</td>
                     <td>
-                      <input
-                        aria-label={`Billing rate for ${managedUser.email}`}
-                        className="rate-input"
-                        min="0"
-                        step="0.01"
-                        type="number"
-                        value={rateDrafts[managedUser.user_id] ?? String(managedUser.billing_rate_per_unit)}
-                        onChange={(event) =>
-                          setRateDrafts((current) => ({ ...current, [managedUser.user_id]: event.target.value }))
-                        }
-                      />
+                      {user.role === "superadmin" ? (
+                        <input
+                          aria-label={`Billing rate for ${managedUser.email}`}
+                          className="rate-input"
+                          min="0"
+                          step="0.01"
+                          type="number"
+                          value={rateDrafts[managedUser.user_id] ?? String(managedUser.billing_rate_per_unit)}
+                          onChange={(event) =>
+                            setRateDrafts((current) => ({ ...current, [managedUser.user_id]: event.target.value }))
+                          }
+                        />
+                      ) : (
+                        `$${managedUser.billing_rate_per_unit.toFixed(2)}`
+                      )}
                     </td>
                     <td>{formatDateTime(managedUser.created_at)}</td>
                     <td>{formatDateTime(managedUser.last_login_at)}</td>
                     <td>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => void saveRate(managedUser)}
-                        disabled={savingUserId === managedUser.user_id}
-                      >
-                        <Save size={16} aria-hidden="true" />
-                        Save
-                      </button>
+                      {user.role === "superadmin" && (
+                        <button
+                          className="secondary-button compact-action-button"
+                          type="button"
+                          onClick={() => void saveRate(managedUser)}
+                          disabled={savingUserId === managedUser.user_id}
+                        >
+                          <Save size={16} aria-hidden="true" />
+                          Save
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -1766,7 +2403,7 @@ function useHashPage(): [Page, (page: Page) => void] {
 
 function parseHash(hash: string): Page {
   const value = hash.replace(/^#\/?/, "").split("/")[0] as Page;
-  if (["intake", "integrations", "rubrics", "users", "profile"].includes(value)) {
+  if (["intake", "universities", "integrations", "rubrics", "users", "profile"].includes(value)) {
     return value;
   }
   return "intake";
@@ -1775,6 +2412,7 @@ function parseHash(hash: string): Page {
 function pageTitle(page: Page): string {
   const titles: Record<Page, string> = {
     intake: "Applicant document intake",
+    universities: "University Management",
     integrations: "Integrations",
     rubrics: "Rubrics",
     users: "Users",
@@ -1786,6 +2424,7 @@ function pageTitle(page: Page): string {
 function pageEyebrow(page: Page): string {
   const eyebrows: Record<Page, string> = {
     intake: "Document operations",
+    universities: "Superadmin Console",
     integrations: "Connections",
     rubrics: "Rubric operations",
     users: "Administration",
@@ -1797,6 +2436,7 @@ function pageEyebrow(page: Page): string {
 function pageDescription(page: Page): string {
   const descriptions: Record<Page, string> = {
     intake: "Upload applicant materials, track parsing progress, review extracted details, and monitor recent intake activity.",
+    universities: "Manage university tenant accounts, rotate global programmatic credentials, and configure billing structures.",
     integrations: "Connect external document sources and admissions systems as the workspace expands.",
     rubrics: "Create and maintain program scoring templates used during document intake.",
     users: "Admin-only view of accounts created for this workspace.",
@@ -1815,20 +2455,62 @@ function mergeRecentJobs(current: Job[], updates: Job[]): Job[] {
     .slice(0, 20);
 }
 
-function ensureDefaultSections(sections: SectionAnalysis[]): SectionAnalysis[] {
-  return fallbackRubrics[0].sections.map((rubricSection) => {
-    return (
-      sections.find((section) => section.section_id === rubricSection.section_id) ?? {
-        section_id: rubricSection.section_id,
-        label: rubricSection.name,
-        score: 0,
-        max_score: rubricSection.max_points,
-        evidence: ["Missing or not parsed yet. Human review required."],
-        rubric_criteria: [`${rubricSection.name} rubric review`],
-        status: "missing"
-      }
-    );
+function jobsForApplication(applicationId: string, recentJobs: Job[], queueItems: UploadQueueItem[]): Job[] {
+  const byId = new Map<string, Job>();
+  for (const job of recentJobs) {
+    if (job.application_id === applicationId) {
+      byId.set(job.job_id, job);
+    }
+  }
+  for (const item of queueItems) {
+    const job = item.job;
+    if (job?.application_id === applicationId) {
+      byId.set(job.job_id, job);
+    }
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => new Date(right.received_at).getTime() - new Date(left.received_at).getTime()
+  );
+}
+
+function ensureDefaultSections(sections: SectionAnalysis[], rubric: Rubric): SectionAnalysis[] {
+  return rubric.sections.map((rubricSection) => {
+    const scoredSection = sections.find((section) => section.section_id === rubricSection.section_id);
+    if (scoredSection) {
+      return adaptScoredSectionToRubricSection(scoredSection, rubricSection);
+    }
+    return {
+      section_id: rubricSection.section_id,
+      label: rubricSection.name,
+      score: 0,
+      max_score: rubricSection.max_points,
+      evidence: ["Missing or not parsed yet. Human review required."],
+      rubric_criteria: [`${rubricSection.name} rubric review`],
+      status: "missing"
+    };
   });
+}
+
+function adaptScoredSectionToRubricSection(
+  section: SectionAnalysis,
+  rubricSection: RubricSection
+): SectionAnalysis {
+  const sourceMax = Number(section.max_score);
+  const targetMax = Number(rubricSection.max_points);
+  const shouldScale = Number.isFinite(sourceMax) && sourceMax > 0 && Number.isFinite(targetMax) && targetMax > 0;
+  const score = shouldScale ? Math.min(targetMax, Math.max(0, (section.score / sourceMax) * targetMax)) : section.score;
+  const maxScore = shouldScale ? targetMax : section.max_score;
+  const rubricCriteria = [section.label, ...section.rubric_criteria].filter(
+    (value, index, values) => value && values.indexOf(value) === index
+  );
+  return {
+    ...section,
+    section_id: rubricSection.section_id,
+    label: rubricSection.name,
+    score,
+    max_score: maxScore,
+    rubric_criteria: rubricCriteria
+  };
 }
 
 function localId(): string {
@@ -1874,8 +2556,9 @@ function pageCountForJob(job: Job): number {
   return 1;
 }
 
-function billableUnitsForPages(pages: number): number {
-  return pages > 0 ? Math.max(1, Math.ceil(pages / 10)) : 0;
+function billableUnitsForPages(pages: number, pagesPerUnit?: number): number {
+  const divisor = pagesPerUnit && pagesPerUnit >= 1 ? pagesPerUnit : 10;
+  return pages > 0 ? Math.max(1, Math.ceil(pages / divisor)) : 0;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1951,4 +2634,8 @@ function displayUserRole(role: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
+}
+
+function isRequestTimeout(error: unknown): boolean {
+  return errorMessage(error).toLowerCase().includes("request timed out");
 }

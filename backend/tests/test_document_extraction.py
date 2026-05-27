@@ -22,6 +22,8 @@ from app.services.document_extraction import (
     ExtractionResult,
     ExtractionTimeoutError,
     MockDocumentExtractionService,
+    count_source_document_pages,
+    resolved_document_page_count,
 )
 from app.services.storage import LocalStorageService
 
@@ -213,6 +215,27 @@ def test_extract_document_persists_ocr_payload_and_updates_document(
         assert document.processing_status == "extracted"
         assert extracted is not None
         assert extracted.extraction_confidence == 0.95
+
+
+def test_source_pdf_page_count_is_used_for_billing_when_ocr_pages_are_partial() -> None:
+    pdf_bytes = (
+        b"%PDF-1.7\n"
+        b"1 0 obj << /Type /Pages /Count 3 >> endobj\n"
+        b"2 0 obj << /Type /Page /Parent 1 0 R >> endobj\n"
+        b"3 0 obj << /Type /Page /Parent 1 0 R >> endobj\n"
+        b"4 0 obj << /Type /Page /Parent 1 0 R >> endobj\n"
+    )
+    extracted = ExtractedDocumentContent(
+        document_id="document-1",
+        raw_text="Only first OCR page",
+        pages=[{"page_number": 1, "text": "Only first OCR page"}],
+        tables=[],
+        key_value_pairs={},
+        extraction_metadata={"provider": "fake", "page_count": 1, "source_page_count": 3},
+    )
+
+    assert count_source_document_pages(pdf_bytes, "pdf") == 3
+    assert resolved_document_page_count(extracted) == 3
 
 
 def test_extract_document_is_idempotent_without_force(

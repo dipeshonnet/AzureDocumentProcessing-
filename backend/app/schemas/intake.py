@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 JobStatus = Literal["queued", "processing", "completed", "failed"]
-UserRoleValue = Literal["admin", "admissions_reviewer", "read_only_auditor"]
+UserRoleValue = Literal["superadmin", "admin", "admissions_reviewer", "read_only_auditor"]
 
 
 class IntakeSchema(BaseModel):
@@ -20,6 +20,8 @@ class AuthUserRead(IntakeSchema):
     role: UserRoleValue
     billing_rate_per_unit: float = 1.0
     university_logo_data_url: str | None = None
+    university_id: str | None = None
+    pages_per_billable_unit: int = 10
 
 
 class AuthResponse(IntakeSchema):
@@ -84,7 +86,9 @@ class IntakeJobRead(IntakeSchema):
     finished_at: datetime | None = None
     applicant_name: str
     applicant_id: str
+    student_unique_id: str | None = None
     program_applied: str
+    intake_term: str
     application_status: str
     document_name: str
     file_size: int | None = None
@@ -110,6 +114,7 @@ class ManagedUserRead(IntakeSchema):
     rubric_count: int = 0
     billing_rate_per_unit: float = 1.0
     university_logo_data_url: str | None = None
+    university_id: str | None = None
     created_at: datetime
     last_login_at: datetime | None = None
 
@@ -172,3 +177,35 @@ class SavedRubricRead(SavedRubricUpdate):
     rubric_id: str
     created_at: datetime
     updated_at: datetime
+
+
+class RubricStorageDiagnostics(IntakeSchema):
+    database_dialect: str
+    saved_rubrics_table_exists: bool
+    rubric_count: int
+    rubric_ids: list[str]
+
+
+class UniversityCreate(BaseModel):
+    name: str = Field(min_length=1)
+    admin_email: str | None = None
+
+
+class UniversityRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    university_id: str
+    name: str
+    logo_data_url: str | None = None
+    pages_per_billable_unit: int
+    api_key: str
+    webhook_url: str | None = None
+    created_at: datetime
+
+
+class UniversityIntegrationUpdate(BaseModel):
+    webhook_url: str | None = None
+
+
+class ReviewerCreateRequest(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=8)

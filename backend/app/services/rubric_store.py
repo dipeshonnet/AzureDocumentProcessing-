@@ -33,17 +33,26 @@ def ensure_default_saved_rubrics(db: Session) -> None:
     db.commit()
 
 
-def list_saved_rubrics(db: Session) -> list[SavedRubric]:
+def list_saved_rubrics(db: Session, university_id: str | None = None) -> list[SavedRubric]:
     ensure_default_saved_rubrics(db)
-    return list(db.scalars(select(SavedRubric).order_by(SavedRubric.updated_at.desc(), SavedRubric.name)))
+    return list(
+        db.scalars(
+            select(SavedRubric)
+            .where((SavedRubric.university_id == university_id) | (SavedRubric.university_id.is_(None)))
+            .order_by(SavedRubric.updated_at.desc(), SavedRubric.name)
+        ).all()
+    )
 
 
-def get_saved_rubric(db: Session, rubric_id: str) -> SavedRubric | None:
+def get_saved_rubric(db: Session, rubric_id: str, university_id: str | None = None) -> SavedRubric | None:
     ensure_default_saved_rubrics(db)
-    return db.get(SavedRubric, rubric_id)
+    rubric = db.get(SavedRubric, rubric_id)
+    if rubric and rubric.university_id and rubric.university_id != university_id:
+        return None
+    return rubric
 
 
-def create_saved_rubric(db: Session, payload: SavedRubricCreate) -> SavedRubric:
+def create_saved_rubric(db: Session, payload: SavedRubricCreate, university_id: str | None = None) -> SavedRubric:
     rubric_id = payload.rubric_id.strip() if payload.rubric_id else slugify(payload.name)
     if not rubric_id:
         rubric_id = f"rubric_{uuid4().hex[:8]}"
@@ -61,6 +70,7 @@ def create_saved_rubric(db: Session, payload: SavedRubricCreate) -> SavedRubric:
         sections=[section.model_dump() for section in payload.sections],
         version=1,
         is_active=True,
+        university_id=university_id,
     )
     db.add(rubric)
     db.commit()
@@ -105,7 +115,7 @@ def default_operations_rubric_payload() -> SavedRubricCreate:
     return SavedRubricCreate.model_validate(
         {
             "rubric_id": DEFAULT_OPERATIONS_RUBRIC_ID,
-            "name": "Nursing admissions operations rubric",
+            "name": "Default Rubric",
             "description": "Editable operational rubric template based on GPA, prerequisites, recommendation letters, short answer, experience, and socioeconomic context. Decision support only.",
             "total_points": 100,
             "sections": [

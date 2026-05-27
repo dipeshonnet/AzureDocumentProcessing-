@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -17,10 +18,27 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _generate_api_key() -> str:
+    return secrets.token_hex(32)
+
+
+class University(Base):
+    __tablename__ = "universities"
+
+    university_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    logo_data_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pages_per_billable_unit: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    api_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True, default=_generate_api_key)
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
+
+
 class Applicant(Base):
     __tablename__ = "applicants"
 
     applicant_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    student_unique_id: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True, index=True)
     first_name: Mapped[str] = mapped_column(String(120), nullable=False)
     last_name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
@@ -44,7 +62,15 @@ class Application(Base):
         nullable=False,
         index=True,
     )
+    university_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("universities.university_id"),
+        nullable=True,
+        index=True,
+    )
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    program_applied: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    intake_term: Mapped[str | None] = mapped_column(String(80), nullable=True)
     processing_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     review_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     final_human_decision: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -52,6 +78,7 @@ class Application(Base):
     processing_errors: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     reviewer_audit_metadata: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
 
+    university: Mapped[University | None] = relationship()
     applicant: Mapped[Applicant] = relationship(back_populates="applications")
     documents: Mapped[list[ApplicationDocument]] = relationship(
         back_populates="application",
@@ -205,6 +232,12 @@ class LocalUser(Base):
     __tablename__ = "local_users"
 
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    university_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("universities.university_id"),
+        nullable=True,
+        index=True,
+    )
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(80), nullable=False, default="admissions_reviewer")
@@ -213,6 +246,7 @@ class LocalUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    university: Mapped[University | None] = relationship()
     sessions: Mapped[list[AuthSession]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -260,6 +294,12 @@ class SavedRubric(Base):
     __tablename__ = "saved_rubrics"
 
     rubric_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    university_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("universities.university_id"),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -268,3 +308,5 @@ class SavedRubric(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utc_now, onupdate=_utc_now)
+
+    university: Mapped[University | None] = relationship()

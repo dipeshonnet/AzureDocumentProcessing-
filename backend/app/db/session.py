@@ -15,8 +15,9 @@ def get_database_url(settings: AppSettings) -> str:
 
 
 def create_db_engine(database_url: str) -> Engine:
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args, future=True)
+    if database_url.startswith("sqlite"):
+        return create_engine(database_url, connect_args={"check_same_thread": False}, future=True)
+    return create_engine(database_url, future=True, pool_pre_ping=True, pool_recycle=1800)
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

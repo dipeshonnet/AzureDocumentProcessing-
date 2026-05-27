@@ -17,6 +17,8 @@ AI_DECISION_SUPPORT_ONLY=true
 
 `AUTO_CREATE_DB_SCHEMA` must remain `false` in production. Run database migrations as a controlled deployment step.
 
+Rubrics saved from the Rubrics editor are application data in the same PostgreSQL database configured by `DATABASE_URL`. They are stored in the `saved_rubrics` table; do not provision a separate rubrics database unless a future tenant-isolation design explicitly requires it.
+
 ## Development Auth Replacement
 
 The current `DEV_AUTH_*` settings are for local development only.

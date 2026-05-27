@@ -29,6 +29,7 @@ class AuditAction:
     DOCUMENT_STRUCTURED_EXTRACTION = "document_structured_extraction"
     DOCUMENT_SUMMARIZATION = "document_summarization"
     APPLICATION_SCORING = "application_scoring"
+    APPLICATION_IDENTITY_DERIVED = "application_identity_derived"
     SCORE_OVERRIDE = "score_override"
     FINAL_DECISION = "final_decision"
     INTAKE_PARSE = "intake_parse"
