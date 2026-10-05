@@ -1,0 +1,64 @@
+# Never omit plan: Render's default compute plan is paid.
+services:
+  - type: web
+    name: admissions-api
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements-free.txt
+    startCommand: python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: APP_ENV
+        value: render-free
+      - key: DEV_AUTH_ENABLED
+        value: "false"
+      - key: EXPOSE_LEGACY_API
+        value: "false"
+      - key: FRONTEND_DIST_PATH
+        value: ""
+      - key: DATABASE_SCHEMA
+        value: admissions_app
+      - key: AUTO_CREATE_DB_SCHEMA
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: PUBLIC_APP_URL
+        value: https://admissions.everydayai.work
+      - key: BACKEND_CORS_ORIGINS
+        sync: false
+      - key: STORAGE_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        value: https://eqqwjzrnkvbznjmhsdta.supabase.co
+      - key: SUPABASE_STORAGE_BUCKET
+        value: admissions-raw
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: LLAMA_CLOUD_API_KEY
+        sync: false
+      - key: MAX_UPLOAD_BYTES
+        value: "4194304"
+      - key: DOCUMENT_EXTRACTION_BACKEND
+        value: llamaparse
+      - key: PARSER_MODE
+        value: azure
+      - key: INTAKE_WORKER_ENABLED
+        value: "true"
+      - key: INTAKE_QUEUE_WATCHDOG_SECONDS
+        value: "0"
+      - key: DOCUMENT_CLASSIFICATION_BACKEND
+        value: mock
+      - key: STRUCTURED_EXTRACTION_BACKEND
+        value: mock
+      - key: DOCUMENT_SUMMARIZATION_BACKEND
+        value: mock
+      - key: RUBRIC_SCORING_BACKEND
+        value: mock

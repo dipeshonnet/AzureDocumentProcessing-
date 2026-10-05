@@ -4,10 +4,14 @@ import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Index, text
+from sqlalchemy.dialects.mssql import NVARCHAR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+# SQL Server's legacy TEXT type cannot participate in modern string operations.
+Text = Text().with_variant(NVARCHAR(None), "mssql")
 
 
 def _uuid() -> str:
@@ -36,9 +40,13 @@ class University(Base):
 
 class Applicant(Base):
     __tablename__ = "applicants"
+    __table_args__ = (
+        Index("ix_applicants_student_unique_id", "student_unique_id",
+              mssql_where=text("student_unique_id IS NOT NULL")),
+    )
 
     applicant_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    student_unique_id: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True, index=True)
+    student_unique_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     first_name: Mapped[str] = mapped_column(String(120), nullable=False)
     last_name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)

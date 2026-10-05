@@ -45,6 +45,10 @@ REQUIRED_CONFIG_KEYS: tuple[str, ...] = (
 SECRET_CONFIG_KEYS: frozenset[str] = frozenset(
     {
         "APP_SECRET_KEY",
+        "BOOTSTRAP_ADMIN_PASSWORD",
+        "SMTP_PASSWORD",
+        "SUPABASE_SERVICE_KEY",
+        "LLAMA_CLOUD_API_KEY",
         "AZURE_STORAGE_CONNECTION_STRING",
         "AZURE_DOCUMENT_INTELLIGENCE_KEY",
         "AZURE_LANGUAGE_KEY",
@@ -64,9 +68,25 @@ class AppSettings(BaseSettings):
     app_env: str = "local"
     app_name: str = "Admissions AI Reviewer API"
     app_secret_key: str | None = None
+    bootstrap_admin_email: str | None = None
+    bootstrap_admin_password: str | None = None
+    public_app_url: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_use_tls: bool = True
+    expose_legacy_api: bool = True
+    frontend_dist_path: str | None = None
     backend_cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     log_level: str = "INFO"
     storage_backend: str = "local"
+    supabase_url: str | None = None
+    supabase_service_key: str | None = None
+    supabase_storage_bucket: str = "admissions-raw"
+    llama_cloud_api_key: str | None = None
+    azure_document_intelligence_free_tier: bool = False
     local_storage_root: str = "./storage"
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
     document_extraction_backend: str = "mock"
@@ -86,6 +106,8 @@ class AppSettings(BaseSettings):
     parser_mode: str = "mock"
     intake_mock_processing_delay_seconds: float = Field(default=0.15, ge=0)
     intake_worker_enabled: bool = True
+    # Zero waits for the local queue; it lets serverless SQL pause while idle.
+    intake_queue_watchdog_seconds: float = Field(default=0, ge=0)
     dev_auth_enabled: bool = True
     dev_auth_default_actor: str = "dev-local-reviewer"
     dev_auth_default_role: str = "admissions_reviewer"
@@ -96,6 +118,7 @@ class AppSettings(BaseSettings):
     auto_create_db_schema: bool = False
 
     database_url: str | None = None
+    database_schema: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,62}$")
 
     azure_storage_account_name: str | None = None
     azure_storage_container_documents: str | None = None

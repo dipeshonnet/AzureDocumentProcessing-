@@ -29,7 +29,7 @@ def main() -> int:
         raise SystemExit("DATABASE_URL is not configured.")
 
     storage = get_storage_service(settings)
-    engine = create_db_engine(settings.database_url)
+    engine = create_db_engine(settings.database_url, settings.database_schema)
     session_factory = create_session_factory(engine)
 
     updated = 0

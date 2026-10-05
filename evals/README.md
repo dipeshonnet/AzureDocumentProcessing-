@@ -1,5 +1,8 @@
 # Admissions AI Evals
 
+Mock and optional Azure eval harness.
+Case YAML files live in `cases/`.
+
 Run the mock evaluation harness from the repository root:
 
 ```powershell

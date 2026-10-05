@@ -1,0 +1,12 @@
+# Azure SDKs and ODBC are not installed in the Render/Supabase profile.
+llama-cloud>=2.8,<3.0
+pypdf>=5.0,<7.0
+fastapi>=0.115,<1.0
+httpx>=0.27,<1.0
+openai>=1.42,<2.0
+psycopg[binary]>=3.2,<4.0
+pydantic-settings>=2.6,<3.0
+python-multipart>=0.0.20,<1.0
+pyyaml>=6.0,<7.0
+sqlalchemy>=2.0,<3.0
+uvicorn>=0.30,<1.0

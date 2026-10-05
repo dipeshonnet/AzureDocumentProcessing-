@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote, urlsplit
+
+import httpx
 
 from app.config import AppSettings
 
@@ -129,13 +132,19 @@ class AzureBlobStorageService:
     @staticmethod
     def _create_blob_service_client(settings: AppSettings) -> object:
         connection_string = settings.azure_storage_connection_string
-        if not connection_string:
+        if not connection_string and not settings.azure_storage_account_name:
             raise StorageConfigurationError("Azure Blob Storage connection string is not configured.")
         try:
             from azure.storage.blob import BlobServiceClient
         except ImportError as exc:
             raise StorageConfigurationError("azure-storage-blob is required for Azure Blob Storage.") from exc
-        return BlobServiceClient.from_connection_string(connection_string)
+        if connection_string:
+            return BlobServiceClient.from_connection_string(connection_string)
+        from azure.identity import DefaultAzureCredential
+        return BlobServiceClient(
+            account_url=f"https://{settings.azure_storage_account_name}.blob.core.windows.net",
+            credential=DefaultAzureCredential(),
+        )
 
 
 def validate_blob_path(storage_path: str) -> str:
@@ -160,4 +169,45 @@ def get_storage_service(settings: AppSettings) -> StorageService:
         return LocalStorageService(settings.local_storage_root)
     if backend == "azure":
         return AzureBlobStorageService(settings)
+    if backend == "supabase":
+        return SupabaseStorageService(settings)
     raise ValueError(f"Unsupported storage backend: {settings.storage_backend}")
+
+
+class SupabaseStorageService:
+    """Server-only access to a private bucket. Keys never reach the browser."""
+
+    def __init__(self, settings: AppSettings):
+        url = (settings.supabase_url or '').rstrip('/')
+        parsed = urlsplit(url)
+        if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                or parsed.path or parsed.query or parsed.fragment or not settings.supabase_service_key):
+            raise StorageConfigurationError('Configure an HTTPS SUPABASE_URL and server-only SUPABASE_SERVICE_KEY.')
+        self.url = url + '/storage/v1/object'
+        self.bucket = quote(validate_blob_path(settings.supabase_storage_bucket), safe='')
+        self.headers = {'apikey': settings.supabase_service_key}
+        if not settings.supabase_service_key.startswith('sb_secret_'):
+            self.headers['Authorization'] = 'Bearer ' + settings.supabase_service_key
+
+    def save_bytes(self, *, storage_path: str, content: bytes) -> str:
+        path = validate_blob_path(storage_path)
+        self._request('POST', f'{self.url}/{self.bucket}/{quote(path, safe="/")}',
+                      content=content, headers={**self.headers, 'Content-Type': 'application/octet-stream', 'x-upsert': 'true'})
+        return path
+
+    def read_bytes(self, *, storage_path: str) -> bytes:
+        path = validate_blob_path(storage_path)
+        return self._request('GET', f'{self.url}/authenticated/{self.bucket}/{quote(path, safe="/")}',
+                             headers=self.headers).content
+
+    @staticmethod
+    def _request(method: str, url: str, **kwargs) -> httpx.Response:
+        try:
+            response = httpx.request(method, url, timeout=60, follow_redirects=False, **kwargs)
+            if response.status_code == 404:
+                raise StorageNotFoundError('Stored Supabase document was not found.')
+            if not response.is_success:
+                raise StorageOperationError('Supabase storage request failed. Check the bucket, credentials and free quota.')
+            return response
+        except httpx.HTTPError as exc:
+            raise StorageOperationError('Supabase storage could not be reached.') from exc

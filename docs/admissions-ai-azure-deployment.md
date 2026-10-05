@@ -1,5 +1,8 @@
 # Azure Deployment Configuration
 
+For the runnable free-tier-oriented demo, use [azure-free-tier-mvp.md](azure-free-tier-mvp.md).
+The guidance below describes the broader production target, including paid AI, migrations and identity integration.
+
 This project is ready for Azure deployment planning, but this repository does not currently include GitHub Actions workflows. Do not deploy from this step. Use the manual checklist below or wire the same commands into the CI/CD system already approved by the institution.
 
 ## Recommended Azure Architecture

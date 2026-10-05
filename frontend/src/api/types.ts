@@ -1,4 +1,4 @@
-export type UserRole = "superadmin" | "admin" | "admissions_reviewer" | "read_only_auditor";
+export type UserRole = "superadmin" | "admin" | "admissions_reviewer" | "read_only_auditor" | "finance_viewer";
 
 export type AuthUser = {
   user_id: string;
@@ -8,6 +8,7 @@ export type AuthUser = {
   university_logo_data_url?: string | null;
   university_id?: string | null;
   pages_per_billable_unit?: number;
+  workspace_role?: string | null;
 };
 
 export type University = {

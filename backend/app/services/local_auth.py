@@ -28,12 +28,25 @@ class AuthError(Exception):
 class AuthenticatedUser:
     user: LocalUser
     token: str
+    workspace_id: str | None = None
+    workspace_role: str | None = None
+
+    @property
+    def university_id(self) -> str | None:
+        return self.workspace_id or self.user.university_id
+
+    @property
+    def effective_role(self) -> UserRole:
+        if self.user.role == "superadmin":
+            return UserRole.SUPERADMIN
+        return UserRole({"university_owner": "admin", "admissions_manager": "admin", "reviewer": "admissions_reviewer",
+                         "auditor": "read_only_auditor", "finance_viewer": "finance_viewer"}.get(self.workspace_role, self.user.role))
 
     @property
     def actor(self) -> AuthenticatedActor:
         return AuthenticatedActor(
             actor_id=self.user.email,
-            role=UserRole(self.user.role),
+            role=self.effective_role,
             auth_mode="local_session",
         )
 
@@ -67,6 +80,13 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def ensure_demo_user(db: Session) -> LocalUser:
+    from app.config import get_settings
+    settings = get_settings()
+    cloud = settings.app_env not in {"local", "test", "development"}
+    email = settings.bootstrap_admin_email if cloud else DEMO_EMAIL
+    password = settings.bootstrap_admin_password if cloud else DEMO_PASSWORD
+    if cloud and (not email or not password or len(password) < 16):
+        raise RuntimeError("Cloud startup requires BOOTSTRAP_ADMIN_EMAIL and a password of at least 16 characters.")
     from app.models.admissions import University
     default_uni = db.scalar(select(University).where(University.name == "Default University"))
     if default_uni is None:
@@ -79,7 +99,7 @@ def ensure_demo_user(db: Session) -> LocalUser:
         db.commit()
         db.refresh(default_uni)
 
-    user = db.scalar(select(LocalUser).where(LocalUser.email == DEMO_EMAIL))
+    user = db.scalar(select(LocalUser).where(LocalUser.email == email))
     if user is not None:
         dirty = False
         if user.role != UserRole.SUPERADMIN.value:
@@ -93,8 +113,8 @@ def ensure_demo_user(db: Session) -> LocalUser:
             db.refresh(user)
         return user
     user = LocalUser(
-        email=DEMO_EMAIL,
-        password_hash=hash_password(DEMO_PASSWORD),
+        email=email,
+        password_hash=hash_password(password),
         role=UserRole.SUPERADMIN.value,
         university_id=default_uni.university_id,
     )
@@ -161,6 +181,7 @@ def bearer_token_from_header(authorization: str | None) -> str | None:
 
 def get_authenticated_user(
     authorization: str | None = Header(default=None),
+    x_workspace_id: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
     if authorization and authorization.startswith("ApiKey "):
@@ -179,7 +200,9 @@ def get_authenticated_user(
             )
         if admin_user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No user associated with university API key.")
-        return AuthenticatedUser(user=admin_user, token=api_key)
+        if x_workspace_id and x_workspace_id != university.university_id:
+            raise HTTPException(403, "An API key cannot switch university workspaces.")
+        return AuthenticatedUser(user=admin_user, token=api_key, workspace_id=university.university_id)
 
     token = bearer_token_from_header(authorization)
     if token is None:
@@ -187,7 +210,21 @@ def get_authenticated_user(
     user = user_for_token(db=db, token=token)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session.")
-    return AuthenticatedUser(user=user, token=token)
+    from app.services.workflow import membership
+    tenant = x_workspace_id or user.university_id
+    if not tenant:
+        raise HTTPException(403, "Workspace membership required.")
+    member = membership(db, tenant, user)
+    if user.role != "superadmin" and (member is None or member.payload["status"] != "active"):
+        raise HTTPException(403, "Active workspace membership required.")
+    if x_workspace_id:
+        from app.models import University
+        if db.get(University, tenant) is None:
+            raise HTTPException(404, "Workspace not found.")
+    # Lazily materialized legacy memberships must survive read-only requests.
+    if member is not None:
+        db.commit()
+    return AuthenticatedUser(user=user, token=token, workspace_id=tenant, workspace_role=member.payload["role"] if member else "university_owner")
 
 
 def require_local_roles(*roles: UserRole):
@@ -195,7 +232,7 @@ def require_local_roles(*roles: UserRole):
     allowed.add(UserRole.SUPERADMIN)
 
     def dependency(authenticated: AuthenticatedUser = Depends(get_authenticated_user)) -> AuthenticatedUser:
-        if UserRole(authenticated.user.role) not in allowed:
+        if authenticated.effective_role not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Actor role is not allowed to perform this action.",

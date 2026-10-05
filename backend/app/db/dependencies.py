@@ -13,21 +13,21 @@ from app.db.session import create_db_engine, create_session_factory, get_databas
 
 
 @lru_cache
-def _engine_for_url(database_url: str, auto_create_schema: bool = False) -> Engine:
-    engine = create_db_engine(database_url)
+def _engine_for_url(database_url: str, auto_create_schema: bool = False, database_schema: str | None = None) -> Engine:
+    engine = create_db_engine(database_url, database_schema)
     if database_url.startswith("sqlite") or auto_create_schema:
         init_db(engine)
     return engine
 
 
 @lru_cache
-def _session_factory_for_url(database_url: str, auto_create_schema: bool = False) -> sessionmaker[Session]:
-    return create_session_factory(_engine_for_url(database_url, auto_create_schema))
+def _session_factory_for_url(database_url: str, auto_create_schema: bool = False, database_schema: str | None = None) -> sessionmaker[Session]:
+    return create_session_factory(_engine_for_url(database_url, auto_create_schema, database_schema))
 
 
 def get_db(settings: AppSettings = Depends(get_settings)) -> Generator[Session, None, None]:
     database_url = get_database_url(settings)
-    session_factory = _session_factory_for_url(database_url, settings.auto_create_db_schema)
+    session_factory = _session_factory_for_url(database_url, settings.auto_create_db_schema, settings.database_schema)
     session = session_factory()
     try:
         yield session

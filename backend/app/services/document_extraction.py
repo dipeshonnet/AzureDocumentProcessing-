@@ -215,6 +215,21 @@ class AzureDocumentIntelligenceExtractionService(BaseDocumentExtractionService):
             raise
 
     def _analyze_stream(self, stream: BinaryIO, content_type: str) -> ExtractionResult:
+        if self.settings.azure_document_intelligence_free_tier:
+            content = stream.read()
+            if len(content) > 4 * 1024 * 1024:
+                raise AzureDocumentExtractionError('Azure F0 OCR supports files up to 4 MB.')
+            if content_type == 'application/pdf':
+                from pypdf import PdfReader
+                try:
+                    page_count = len(PdfReader(BytesIO(content)).pages)
+                except Exception as exc:
+                    raise AzureDocumentExtractionError('PDF page count could not be verified for free OCR.') from exc
+                if page_count > 2:
+                    raise AzureDocumentExtractionError('Azure F0 analyzes only two pages. Select LlamaParse free OCR for this document.')
+            elif content_type not in {'image/jpeg', 'image/png'}:
+                raise AzureDocumentExtractionError('Free Azure OCR profile accepts PDFs and single-page images only.')
+            stream = BytesIO(content)
         try:
             poller = self.client.begin_analyze_document(
                 "prebuilt-layout",
@@ -251,7 +266,60 @@ def get_document_extraction_service(
         return MockDocumentExtractionService(db=db, settings=settings)
     if backend == "azure":
         return AzureDocumentIntelligenceExtractionService(db=db, settings=settings)
+    if backend == "llamaparse":
+        return LlamaParseExtractionService(db=db, settings=settings)
     raise AzureDocumentExtractionError(f"Unsupported document extraction backend: {backend}.")
+
+
+class LlamaParseExtractionService(BaseDocumentExtractionService):
+    def __init__(self, *, db: Session, settings: AppSettings):
+        super().__init__(db=db, settings=settings)
+        if not settings.llama_cloud_api_key:
+            raise AzureDocumentExtractionError('LLAMA_CLOUD_API_KEY is required for LlamaParse.')
+
+    def extract_from_file(self, path_or_stream, content_type: str) -> ExtractionResult:
+        from llama_cloud import LlamaCloud
+        extension = next((ext for ext, mime in CONTENT_TYPES_BY_EXTENSION.items() if mime == content_type), None)
+        if not extension:
+            raise UnsupportedDocumentTypeError('Unsupported LlamaParse document type.')
+        if isinstance(path_or_stream, str | Path):
+            content = Path(path_or_stream).read_bytes()
+        else:
+            content = path_or_stream.read()
+        try:
+            with LlamaCloud(api_key=self.settings.llama_cloud_api_key,
+                           timeout=self.settings.document_extraction_timeout_seconds, max_retries=0) as client:
+                uploaded = client.files.create(
+                    file=(f'document.{extension}', content, content_type), purpose='parse',
+                )
+                try:
+                    result = client.parsing.parse(
+                        file_id=uploaded.id, tier='cost_effective', version='latest', expand=['markdown'],
+                        timeout=self.settings.document_extraction_timeout_seconds,
+                    )
+                    pages = [{'page_number': i + 1, 'text': page.markdown, 'lines': [], 'words': []}
+                             for i, page in enumerate(result.markdown.pages if result.markdown else [])]
+                finally:
+                    try:
+                        client.files.delete(uploaded.id)
+                    except Exception:
+                        # Do not expose provider exceptions, which can contain credentials.
+                        logger.warning('LlamaParse upload cleanup failed; check source files in the provider dashboard.')
+        except Exception as exc:
+            raise AzureDocumentExtractionError('LlamaParse failed. Check the Free plan credits and API settings; no paid fallback is used.') from exc
+        raw_text = '\n\n'.join(page['text'] for page in pages)
+        if not raw_text.strip():
+            raise EmptyOcrResultError('LlamaParse returned no text.')
+        return ExtractionResult(raw_text=raw_text, pages=pages,
+                                extraction_metadata={'provider': 'llamaparse', 'tier': 'cost_effective', 'page_count': len(pages)})
+
+    def extract_from_blob(self, blob_path: str) -> ExtractionResult:
+        extension = file_extension(blob_path)
+        content_type = CONTENT_TYPES_BY_EXTENSION.get(extension)
+        if not content_type:
+            raise UnsupportedDocumentTypeError('Unsupported LlamaParse document type.')
+        content = get_storage_service(self.settings).read_bytes(storage_path=blob_path)
+        return self.extract_from_file(BytesIO(content), content_type)
 
 
 def _is_azure_exception(exc: Exception) -> bool:

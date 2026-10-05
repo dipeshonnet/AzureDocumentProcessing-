@@ -1,8 +1,20 @@
 import type { AuthResponse, AuthUser, Job, ManagedUser, Rubric, RubricInput, University } from "./types";
 
-const fallbackApiBaseUrl = "http://127.0.0.1:8000";
+const fallbackApiBaseUrl = import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
 const authTokenKey = "admission-analyser-token";
-const requestTimeoutMs = 20000;
+const workspaceKey = "admission-analyser-workspace";
+
+export function setWorkspaceId(id: string): void {
+  window.localStorage.setItem(workspaceKey, id);
+}
+
+export function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  const workspace = window.localStorage.getItem(workspaceKey);
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(workspace ? { "X-Workspace-Id": workspace } : {}) };
+}
+// Container Apps and serverless Azure SQL may both need to resume after idle.
+const requestTimeoutMs = 90000;
 
 export const apiBaseUrl =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ||
@@ -18,6 +30,7 @@ export function setAuthToken(token: string): void {
 
 export function clearAuthToken(): void {
   window.localStorage.removeItem(authTokenKey);
+  window.localStorage.removeItem(workspaceKey);
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -31,13 +44,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...authHeaders(),
         ...options.headers
       }
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Request timed out. Check that the backend is responding.");
+      throw new Error("Request timed out. The server may be waking from idle; wait a moment and try again.");
     }
     throw error;
   } finally {
@@ -150,6 +163,8 @@ export function uploadFileWithProgress(
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
+    const workspace = window.localStorage.getItem(workspaceKey);
+    if (workspace) xhr.setRequestHeader("X-Workspace-Id", workspace);
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
@@ -197,7 +212,7 @@ export function uploadFileWithProgress(
 export async function downloadJobRecord(jobId: string): Promise<void> {
   const token = getAuthToken();
   const response = await fetch(`${apiBaseUrl}/api/jobs/${jobId}/record`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
+    headers: authHeaders()
   });
   if (!response.ok) {
     throw new Error(await responseError(response));
@@ -241,10 +256,10 @@ export async function fetchUniversities(): Promise<University[]> {
   return request<University[]>("/api/auth/universities");
 }
 
-export async function createUniversity(name: string, adminEmail?: string): Promise<University> {
+export async function createUniversity(name: string, adminEmail?: string, adminPassword?: string): Promise<University> {
   return request<University>("/api/auth/universities", {
     method: "POST",
-    body: JSON.stringify({ name, admin_email: adminEmail?.trim() || null })
+    body: JSON.stringify({ name, admin_email: adminEmail?.trim() || null, admin_password: adminPassword || null })
   });
 }
 
@@ -279,3 +294,5 @@ export async function deleteUniversity(universityId: string): Promise<void> {
     method: "DELETE"
   });
 }
+
+export { request as apiRequest };

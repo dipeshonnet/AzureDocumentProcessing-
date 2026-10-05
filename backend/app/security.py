@@ -15,6 +15,7 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     ADMISSIONS_REVIEWER = "admissions_reviewer"
     READ_ONLY_AUDITOR = "read_only_auditor"
+    FINANCE_VIEWER = "finance_viewer"
 
 
 @dataclass(frozen=True)
@@ -75,7 +76,7 @@ def get_current_actor(request: Request) -> AuthenticatedActor:
     actor = getattr(request.state, "current_actor", None)
     if isinstance(actor, AuthenticatedActor):
         return actor
-    return system_actor()
+    raise HTTPException(status_code=401, detail="Authentication required.")
 
 
 def require_roles(*roles: UserRole) -> Callable[[AuthenticatedActor], AuthenticatedActor]:
@@ -111,5 +112,7 @@ async def development_auth_middleware(request: Request, call_next, settings: App
                 content={"detail": str(exc)},
             )
     else:
-        request.state.current_actor = system_actor()
+        # API routes use their session dependency. Legacy role-based routes
+        # must never receive a privileged system actor from a public request.
+        request.state.current_actor = None
     return await call_next(request)

@@ -84,9 +84,12 @@ def me(
 ) -> AuthUserRead:
     user = authenticated.user
     read = AuthUserRead.model_validate(user)
-    if user.university_id:
+    read.role = authenticated.effective_role.value
+    read.university_id = authenticated.university_id
+    read.workspace_role = authenticated.workspace_role
+    if authenticated.university_id:
         from app.models.admissions import University
-        uni = db.get(University, user.university_id)
+        uni = db.get(University, authenticated.university_id)
         if uni:
             read.university_logo_data_url = uni.logo_data_url
             read.pages_per_billable_unit = uni.pages_per_billable_unit
@@ -123,14 +126,14 @@ def update_profile_logo(
         )
     
     user = authenticated.user
-    if not user.university_id:
+    if not authenticated.university_id:
         raise HTTPException(status_code=400, detail="User does not belong to a university.")
         
-    if UserRole(user.role) not in {UserRole.SUPERADMIN, UserRole.ADMIN}:
+    if authenticated.effective_role not in {UserRole.SUPERADMIN, UserRole.ADMIN}:
         raise HTTPException(status_code=403, detail="Only Admins can update branding logo.")
         
     from app.models.admissions import University
-    uni = db.get(University, user.university_id)
+    uni = db.get(University, authenticated.university_id)
     if not uni:
         raise HTTPException(status_code=404, detail="University not found.")
         
@@ -154,15 +157,18 @@ def list_users(
     if UserRole(user.role) == UserRole.SUPERADMIN:
         users = list(db.scalars(select(LocalUser).order_by(LocalUser.created_at.asc())).all())
     else:
+        from app.services.workflow import rows
+        member_ids = [member.payload["user_id"] for member in rows(db, authenticated.university_id, "membership")
+                      if member.payload.get("status") == "active"]
         users = list(
             db.scalars(
                 select(LocalUser)
-                .where(LocalUser.university_id == user.university_id)
+                .where((LocalUser.university_id == authenticated.university_id) | LocalUser.user_id.in_(member_ids))
                 .order_by(LocalUser.created_at.asc())
             ).all()
         )
         
-    return [_managed_user_read(db, u) for u in users]
+    return [_managed_user_read(db, u, university_id=authenticated.university_id if user.role != "superadmin" else None) for u in users]
 
 
 @router.put("/users/{user_id}/billing-rate", response_model=ManagedUserRead)
@@ -198,6 +204,10 @@ def create_university(
     authenticated: AuthenticatedUser = Depends(require_local_roles(UserRole.SUPERADMIN)),
 ) -> UniversityRead:
     from app.models.admissions import University
+    from app.config import get_settings
+    settings = get_settings()
+    if settings.app_env not in {"local", "test", "development"} and not payload.admin_password:
+        raise HTTPException(status_code=400, detail="Provide an initial admin password of at least 16 characters.")
     existing = db.scalar(select(University).where(University.name == payload.name.strip()))
     if existing:
         raise HTTPException(status_code=400, detail="University already exists.")
@@ -208,10 +218,9 @@ def create_university(
         pages_per_billable_unit=1,
     )
     db.add(uni)
-    db.commit()
-    db.refresh(uni)
-    
-    # Provision initial Admin
+    db.flush()
+
+    # Provision university and admin in one transaction.
     default_admin_email = f"admin@{uni.name.lower().replace(' ', '')}.edu"
     requested_email = (payload.admin_email or "").strip().lower()
     admin_email = requested_email or default_admin_email
@@ -221,7 +230,7 @@ def create_university(
     if existing_admin:
         raise HTTPException(status_code=400, detail="A user with that admin email already exists.")
 
-    admin_password = "EverydayAI"
+    admin_password = payload.admin_password or "EverydayAI"
     admin = LocalUser(
         email=admin_email,
         password_hash=hash_password(admin_password),
@@ -241,7 +250,7 @@ def create_reviewer(
     authenticated: AuthenticatedUser = Depends(require_local_roles(UserRole.ADMIN)),
 ) -> ManagedUserRead:
     user = authenticated.user
-    if not user.university_id:
+    if not authenticated.university_id:
         raise HTTPException(status_code=400, detail="Admin does not belong to a university.")
         
     existing = db.scalar(select(LocalUser).where(LocalUser.email == payload.email.strip()))
@@ -252,7 +261,7 @@ def create_reviewer(
         email=payload.email.strip(),
         password_hash=hash_password(payload.password),
         role=UserRole.ADMISSIONS_REVIEWER.value,
-        university_id=user.university_id,
+        university_id=authenticated.university_id,
     )
     db.add(new_user)
     db.commit()
@@ -267,11 +276,11 @@ def update_university_integration(
     authenticated: AuthenticatedUser = Depends(require_local_roles(UserRole.ADMIN)),
 ) -> UniversityRead:
     user = authenticated.user
-    if not user.university_id:
+    if not authenticated.university_id:
         raise HTTPException(status_code=400, detail="Admin does not belong to a university.")
         
     from app.models.admissions import University
-    uni = db.get(University, user.university_id)
+    uni = db.get(University, authenticated.university_id)
     if not uni:
         raise HTTPException(status_code=404, detail="University not found.")
         
@@ -287,11 +296,11 @@ def rotate_university_key(
     authenticated: AuthenticatedUser = Depends(require_local_roles(UserRole.ADMIN)),
 ) -> UniversityRead:
     user = authenticated.user
-    if not user.university_id:
+    if not authenticated.university_id:
         raise HTTPException(status_code=400, detail="Admin does not belong to a university.")
         
     from app.models.admissions import University
-    uni = db.get(University, user.university_id)
+    uni = db.get(University, authenticated.university_id)
     if not uni:
         raise HTTPException(status_code=404, detail="University not found.")
         
@@ -337,36 +346,45 @@ def delete_university(
     
     if uni.name == "Default University":
         raise HTTPException(status_code=400, detail="Default University cannot be deleted.")
+    from app.models.workflow import WorkflowRecord
+    if db.scalar(select(WorkflowRecord.id).where(WorkflowRecord.university_id == university_id).limit(1)):
+        raise HTTPException(409, "This university has admissions workflow history. Preserve its records instead of deleting it.")
 
-    # 1. Fetch and cascade delete all applications and related models
+    # Delete applications and children.
     apps = db.scalars(select(Application).where(Application.university_id == university_id)).all()
     for app in apps:
         db.execute(delete(IntakeJob).where(IntakeJob.application_id == app.application_id))
         db.delete(app)
     
-    # 2. Delete all saved rubrics
+    # Delete saved rubrics.
     db.execute(delete(SavedRubric).where(SavedRubric.university_id == university_id))
     
-    # 3. Delete all local users (AuthSessions will be deleted by SQLAlchemy cascade on LocalUser.sessions)
+    # Delete local users.
     users = db.scalars(select(LocalUser).where(LocalUser.university_id == university_id)).all()
     for u in users:
         db.delete(u)
     
-    # 4. Delete the university itself
+    # Delete the university.
     db.delete(uni)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 
-def _managed_user_read(db: Session, user: LocalUser) -> ManagedUserRead:
+def _managed_user_read(db: Session, user: LocalUser, university_id: str | None = None) -> ManagedUserRead:
+    from app.models import Application, SavedRubric
+    uploads = select(func.count(distinct(AuditLog.document_id))).where(
+        AuditLog.actor == user.email, AuditLog.action.in_([AuditAction.DOCUMENT_UPLOAD, "requirement_document_upload"]),
+        AuditLog.document_id.is_not(None))
+    if university_id:
+        uploads = uploads.join(Application, AuditLog.application_id == Application.application_id).where(Application.university_id == university_id)
     document_count = db.scalar(
-        select(func.count(distinct(AuditLog.document_id))).where(
-            AuditLog.actor == user.email,
-            AuditLog.action == AuditAction.DOCUMENT_UPLOAD,
-            AuditLog.document_id.is_not(None),
-        )
+        uploads
     ) or 0
+    if university_id:
+        rubric_ids = set(db.scalars(select(SavedRubric.rubric_id).where(SavedRubric.university_id == university_id)))
+        rubric_count = sum((log.new_value or {}).get("rubric_id") in rubric_ids for log in db.scalars(
+            select(AuditLog).where(AuditLog.actor == user.email, AuditLog.action == AuditAction.RUBRIC_SAVE)))
     rubric_count = db.scalar(
         select(func.count(AuditLog.audit_log_id)).where(
             AuditLog.actor == user.email,
@@ -375,9 +393,10 @@ def _managed_user_read(db: Session, user: LocalUser) -> ManagedUserRead:
     ) or 0
     
     logo_data_url = user.university_logo_data_url
-    if user.university_id:
+    tenant = university_id or user.university_id
+    if tenant:
         from app.models.admissions import University
-        uni = db.get(University, user.university_id)
+        uni = db.get(University, tenant)
         if uni:
             logo_data_url = uni.logo_data_url
             
@@ -390,7 +409,7 @@ def _managed_user_read(db: Session, user: LocalUser) -> ManagedUserRead:
         rubric_count=rubric_count,
         billing_rate_per_unit=user.billing_rate_per_unit,
         university_logo_data_url=logo_data_url,
-        university_id=user.university_id,
+        university_id=tenant,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )

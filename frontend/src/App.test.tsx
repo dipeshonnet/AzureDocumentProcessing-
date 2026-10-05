@@ -11,6 +11,11 @@ const user = {
   university_logo_data_url: null
 };
 
+const superadminUser = {
+  ...user,
+  role: "superadmin"
+};
+
 describe("operations console", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -220,8 +225,8 @@ describe("operations console", () => {
     );
   });
 
-  it("lets admins update a user billing rate", async () => {
-    const fetchMock = mockAuthenticatedFetch([], [], [sampleManagedUser]);
+  it("lets superadmins update a user billing rate", async () => {
+    const fetchMock = mockAuthenticatedFetch([], [], [sampleManagedUser], superadminUser);
     setAuthToken("test-token");
     render(<App />);
 
@@ -240,11 +245,16 @@ describe("operations console", () => {
   });
 });
 
-function mockAuthenticatedFetch(rubrics: unknown[] = [], jobs: unknown[] = [], managedUsers: unknown[] = [sampleManagedUser]) {
+function mockAuthenticatedFetch(
+  rubrics: unknown[] = [],
+  jobs: unknown[] = [],
+  managedUsers: unknown[] = [sampleManagedUser],
+  currentUser: typeof user = user
+) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/api/auth/me")) {
-      return new Response(JSON.stringify(user), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(currentUser), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (url.includes("/api/auth/password") && init?.method === "PUT") {
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -252,7 +262,7 @@ function mockAuthenticatedFetch(rubrics: unknown[] = [], jobs: unknown[] = [], m
     if (url.includes("/api/auth/profile-logo") && init?.method === "PUT") {
       const body = JSON.parse(String(init.body || "{}")) as { university_logo_data_url?: string | null };
       return new Response(
-        JSON.stringify({ ...user, university_logo_data_url: body.university_logo_data_url ?? null }),
+        JSON.stringify({ ...currentUser, university_logo_data_url: body.university_logo_data_url ?? null }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }

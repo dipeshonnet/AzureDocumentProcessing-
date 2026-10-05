@@ -1,0 +1,15 @@
+import { useEffect, useState } from "react";
+import { clearAuthToken, setAuthToken, setWorkspaceId } from "../api/client";
+import { opsFile, publicOps } from "./api";
+import { Banner, Field, Panel, date, message, useAction } from "./shared";
+
+type PublicInfo = { email?: string; role?: string; university?: string; requirement_label?: string; instructions?: string; allowed_extensions?: string[]; expires_at?: string; branding?: { brand_name: string; brand_color: string } };
+
+export default function PublicWorkflow({ kind, token }: { kind: "upload" | "invite"; token: string }) {
+  const path = kind === "upload" ? `/uploads/${token}` : `/invitations/${token}`;
+  const [info, setInfo] = useState<PublicInfo>(); const [error, setError] = useState(""); const [complete, setComplete] = useState(false); const [file, setFile] = useState<File | null>(null); const action = useAction();
+  useEffect(() => { let active = true; publicOps<PublicInfo>(path).then(value => { if (active) setInfo(value); }).catch(reason => { if (active) setError(message(reason)); }); return () => { active = false; }; }, [path]);
+  return <main className="workflow-public"><Banner error={error || action.error} notice={action.notice} />{info && !complete ? <Panel title={kind === "upload" ? info.branding?.brand_name ?? "Secure upload" : info.university ?? "Staff invitation"}>
+    {kind === "upload" ? <><h3>{info.requirement_label}</h3><p>{info.instructions}</p><p>This link expires {date(info.expires_at)}.</p><form onSubmit={event => { event.preventDefault(); if (!file) return; void action.run(async () => { await opsFile(path.replace("/uploads/", "/public/uploads/"), file, {}, true); setComplete(true); }, "Your document was received and is processing."); }}><Field label="Your document"><input type="file" required accept={info.allowed_extensions?.join(",")} onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><button className="primary-button" disabled={action.busy || !file}>Upload securely</button></form></> : <><p>Join as {info.role?.replace(/_/g, " ")} using {info.email}.</p><p>Choose a password for a new account, or enter your existing account password.</p><form onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); void action.run(async () => { const accepted = await publicOps<{ token: string; university_id: string }>(path, { password: form.get("password") }); clearAuthToken(); setAuthToken(accepted.token); setWorkspaceId(accepted.university_id); window.location.hash = "#/operations"; window.location.reload(); }); }}><Field label="Account password"><input name="password" type="password" minLength={8} required autoComplete="current-password" /></Field><button className="primary-button" disabled={action.busy}>Accept invitation</button></form></>}
+  </Panel> : !error && !complete ? <p role="status">Opening secure link…</p> : null}{complete ? <Panel title="Document received"><p>Your document is processing. You can close this page.</p></Panel> : null}</main>;
+}

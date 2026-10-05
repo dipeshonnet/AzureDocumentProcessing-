@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   changePassword,
+  apiBaseUrl,
   clearAuthToken,
   createRubric,
   downloadJobRecord,
@@ -48,41 +49,58 @@ import {
   updatePagesPerUnit,
   deleteUniversity
 } from "./api/client";
-import type { AuthUser, Job, JobStatus, ManagedUser, Rubric, RubricComponent, RubricInput, RubricRow, RubricSection, SectionAnalysis, UploadQueueItem, University } from "./api/types";
+import type { AuthUser, Job, JobStatus, ManagedUser, Rubric, UploadQueueItem, University } from "./api/types";
+import { allowedExtensions, allowedLogoTypes, fallbackRubrics, maxLogoBytes, terminalStatuses } from "./app/constants";
+import { fileExtension, localId, readFileAsDataUrl } from "./app/files";
+import {
+  displayUserRole,
+  errorMessage,
+  formatBytes,
+  formatCurrency,
+  formatDateTime,
+  formatRate,
+  formatScore,
+  humanize,
+  isRequestTimeout,
+  trimNumber
+} from "./app/formatters";
+import { billableUnitsForPages, jobsForApplication, mergeRecentJobs, pageCountForJob } from "./app/jobs";
+import { pageDescription, pageEyebrow, pageTitle, parseHash } from "./app/navigation";
+import {
+  addComponent,
+  addRow,
+  addSectionAfter,
+  cloneRubric,
+  ensureDefaultSections,
+  removeComponent,
+  removeRow,
+  removeSection,
+  rubricToInput,
+  updateComponent,
+  updateRow,
+  updateSection
+} from "./app/rubrics";
+import type { Notice, Page } from "./app/types";
+import OperationsWorkspace from "./operations/OperationsWorkspace";
+import PublicWorkflow from "./operations/PublicWorkflow";
 
-type Page = "intake" | "universities" | "integrations" | "rubrics" | "users" | "profile";
-type Notice = { type: "success" | "error"; message: string } | null;
-
-const allowedExtensions = new Set(["pdf", "docx", "txt", "jpg", "jpeg", "png"]);
-const allowedLogoTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
-const maxLogoBytes = 750 * 1024;
-const terminalStatuses = new Set<JobStatus>(["completed", "failed"]);
-const fallbackRubrics: Rubric[] = [
-  {
-    rubric_id: "default_admissions_rubric",
-    name: "Default Rubric",
-    description: "Default local operations rubric. Edit and save copies for each program.",
-    version: 1,
-    total_points: 100,
-    is_active: true,
-    sections: [
-      { section_id: "gpa", name: "GPA", description: "Academic GPA review.", max_points: 30, components: [] },
-      { section_id: "prerequisites", name: "Prerequisites", description: "Prerequisite status review.", max_points: 5, components: [] },
-      { section_id: "recommendation", name: "Letters of recommendation", description: "Recommendation letter review.", max_points: 20, components: [] },
-      { section_id: "short_answer", name: "Short answer", description: "Writing and relevance review.", max_points: 20, components: [] },
-      { section_id: "experience", name: "Experience", description: "Experience review.", max_points: 10, components: [] },
-      { section_id: "socioeconomic_status", name: "Socioeconomic status", description: "Policy-approved contextual review.", max_points: 15, components: [] }
-    ]
-  }
-];
+function DemoNotice({ enabled }: { enabled: boolean }) {
+  if (!enabled) return null;
+  return <div role="status" className="notice notice-warning" style={{ padding: "12px" }}>
+    Demo mode: some processing stages use simulated results. OCR may be real; summaries and scores require human review.
+  </div>;
+}
 
 export default function App() {
   const [page, setPage] = useHashPage();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
   const [rubrics, setRubrics] = useState<Rubric[]>(fallbackRubrics);
 
   useEffect(() => {
+    fetch(`${apiBaseUrl}/api/runtime`).then(response => response.json())
+      .then(config => setDemoMode(config.demo_mode === true)).catch(() => {});
     let active = true;
     fetchCurrentUser()
       .then((currentUser) => {
@@ -125,23 +143,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (user && user.role !== "finance_viewer") {
       void loadRubrics();
     }
   }, [user, loadRubrics]);
 
+  const publicMatch = window.location.hash.match(/^#\/(upload|invite)\/([^/]+)$/);
+  if (publicMatch) {
+    return <PublicWorkflow kind={publicMatch[1] as "upload" | "invite"} token={publicMatch[2]} />;
+  }
   if (authLoading) {
     return <div className="loading-screen">Opening secure workspace...</div>;
   }
 
   if (!user) {
-    return <AuthScreen onAuthenticated={setUser} />;
+    return <><DemoNotice enabled={demoMode} /><AuthScreen onAuthenticated={setUser} /></>;
   }
 
   return (
     <div className="ops-shell">
       <aside className="ops-sidebar" aria-label="Main navigation">
-        <a className="ops-brand" href="#/intake" onClick={() => setPage("intake")}>
+        <a className="ops-brand" href="#/operations" onClick={() => setPage("operations")}>
           <img src={user?.university_logo_data_url || "/admissions-mark.svg"} alt="" style={{ maxHeight: "36px", objectFit: "contain" }} />
           <span>
             <strong>Admission Analyser</strong>
@@ -149,9 +171,12 @@ export default function App() {
           </span>
         </a>
         <nav className="ops-nav">
-          <NavButton page="intake" current={page} onClick={setPage} icon={<FolderInput size={18} />}>
-            Intake
+          <NavButton page="operations" current={page} onClick={setPage} icon={<LayoutDashboard size={18} />}>
+            Cases
           </NavButton>
+          {user.role !== "finance_viewer" ? <NavButton page="intake" current={page} onClick={setPage} icon={<FolderInput size={18} />}>
+            Intake
+          </NavButton> : null}
           {user.role === "superadmin" && (
             <NavButton page="universities" current={page} onClick={setPage} icon={<Plug size={18} />}>
               Universities
@@ -162,9 +187,9 @@ export default function App() {
               Integrations
             </NavButton>
           )}
-          <NavButton page="rubrics" current={page} onClick={setPage} icon={<ListChecks size={18} />}>
+          {user.role !== "finance_viewer" ? <NavButton page="rubrics" current={page} onClick={setPage} icon={<ListChecks size={18} />}>
             Rubrics
-          </NavButton>
+          </NavButton> : null}
           {(user.role === "admin" || user.role === "superadmin") && (
             <NavButton page="users" current={page} onClick={setPage} icon={<Users size={18} />}>
               Users
@@ -181,6 +206,7 @@ export default function App() {
       </aside>
 
       <main className="ops-workspace">
+        <DemoNotice enabled={demoMode} />
         <header className="page-header">
           <div>
             <p className="eyebrow">{pageEyebrow(page)}</p>
@@ -193,10 +219,11 @@ export default function App() {
           </div>
         </header>
 
-        {page === "intake" ? <IntakePage user={user} rubrics={rubrics} /> : null}
+        {page === "intake" && user.role !== "finance_viewer" ? <IntakePage user={user} rubrics={rubrics} /> : null}
+        {page === "operations" || (user.role === "finance_viewer" && page !== "profile") ? <OperationsWorkspace /> : null}
         {page === "universities" ? <UniversitiesPage /> : null}
         {page === "integrations" ? <IntegrationsPage /> : null}
-        {page === "rubrics" ? <RubricsPage rubrics={rubrics} onRubricsChanged={loadRubrics} /> : null}
+        {page === "rubrics" && user.role !== "finance_viewer" ? <RubricsPage rubrics={rubrics} onRubricsChanged={loadRubrics} /> : null}
         {page === "users" ? <UsersPage user={user} /> : null}
         {page === "profile" ? <ProfilePage user={user} /> : null}
       </main>
@@ -229,7 +256,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
     <div className="auth-page" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", backgroundColor: "#f8fafc" }}>
       <div style={{ width: "100%", maxWidth: "420px", padding: "20px" }}>
         
-        {/* Branding header centered right above the login card */}
+        {/* Centered brand header. */}
         <div style={{ textAlign: "center", marginBottom: "24px" }}>
           <img src="/admissions-mark.svg" alt="" style={{ height: "48px", marginBottom: "16px" }} />
           <h2 style={{ fontSize: "28px", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.5px", margin: "0 0 6px" }}>
@@ -242,12 +269,12 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
 
         {notice ? <NoticeBanner notice={notice} /> : null}
 
-        {/* Cohesive, Centered, Premium Login Card */}
+        {/* Login card shell. */}
         <div className="auth-card" style={{ backgroundColor: "#ffffff", padding: "32px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", border: "1px solid #e2e8f0" }}>
           <form onSubmit={(event) => void submitLogin(event)} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             <div>
               <h3 style={{ fontSize: "18px", fontWeight: 600, color: "#0f172a", margin: "0 0 4px" }}>
-                Sign in to your account
+                Sign in
               </h3>
               <p style={{ fontSize: "13px", color: "#64748b", margin: 0 }}>
                 Enter your registered credentials below
@@ -255,7 +282,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
             </div>
 
             <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px", fontWeight: 600, color: "#334155" }}>
-              Email or username
+              Email
               <input 
                 type="text"
                 value={loginEmail} 
@@ -356,7 +383,7 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
       const jobs = await fetchJobsStatus();
       setRecentJobs(jobs);
     } catch {
-      // Recent activity is secondary; upload cards still show user-facing errors.
+      // Recent activity is secondary.
     }
   }, []);
 
@@ -409,7 +436,7 @@ function IntakePage({ user, rubrics }: { user: AuthUser; rubrics: Rubric[] }) {
       }
     };
     void poll();
-    const intervalId = window.setInterval(() => void poll(), 1200);
+    const intervalId = window.setInterval(() => void poll(), 5000);
     return () => window.clearInterval(intervalId);
   }, [mergeJobs, queueItems]);
 
@@ -1252,184 +1279,6 @@ function RubricsPage({
   );
 }
 
-type RubricSetter = (value: Rubric | ((current: Rubric) => Rubric)) => void;
-
-function cloneRubric(rubric: Rubric): Rubric {
-  return JSON.parse(JSON.stringify(rubric)) as Rubric;
-}
-
-function rubricToInput(rubric: Rubric): RubricInput {
-  return {
-    rubric_id: rubric.rubric_id,
-    name: rubric.name,
-    description: rubric.description,
-    version: rubric.version,
-    total_points: rubric.total_points,
-    is_active: rubric.is_active,
-    sections: rubric.sections
-  };
-}
-
-function updateSection(setDraft: RubricSetter, sectionId: string, patch: Partial<RubricSection>) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId ? { ...section, ...patch } : section
-    )
-  }));
-}
-
-function addSectionAfter(setDraft: RubricSetter, index: number) {
-  setDraft((current) => {
-    const nextSections = [...current.sections];
-    nextSections.splice(index + 1, 0, newSection());
-    return { ...current, sections: nextSections };
-  });
-}
-
-function removeSection(setDraft: RubricSetter, sectionId: string) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.filter((section) => section.section_id !== sectionId)
-  }));
-}
-
-function updateComponent(
-  setDraft: RubricSetter,
-  sectionId: string,
-  componentId: string,
-  patch: Partial<RubricComponent>
-) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? {
-            ...section,
-            components: section.components.map((component) =>
-              component.component_id === componentId ? { ...component, ...patch } : component
-            )
-          }
-        : section
-    )
-  }));
-}
-
-function addComponent(setDraft: RubricSetter, sectionId: string) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? { ...section, components: [...section.components, newComponent()] }
-        : section
-    )
-  }));
-}
-
-function removeComponent(setDraft: RubricSetter, sectionId: string, componentId: string) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? { ...section, components: section.components.filter((component) => component.component_id !== componentId) }
-        : section
-    )
-  }));
-}
-
-function updateRow(
-  setDraft: RubricSetter,
-  sectionId: string,
-  componentId: string,
-  rowId: string,
-  patch: Partial<RubricRow>
-) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? {
-            ...section,
-            components: section.components.map((component) =>
-              component.component_id === componentId
-                ? {
-                    ...component,
-                    rows: component.rows.map((row) => (row.row_id === rowId ? { ...row, ...patch } : row))
-                  }
-                : component
-            )
-          }
-        : section
-    )
-  }));
-}
-
-function addRow(setDraft: RubricSetter, sectionId: string, componentId: string) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? {
-            ...section,
-            components: section.components.map((component) =>
-              component.component_id === componentId
-                ? { ...component, rows: [...component.rows, newRow()] }
-                : component
-            )
-          }
-        : section
-    )
-  }));
-}
-
-function removeRow(setDraft: RubricSetter, sectionId: string, componentId: string, rowId: string) {
-  setDraft((current) => ({
-    ...current,
-    sections: current.sections.map((section) =>
-      section.section_id === sectionId
-        ? {
-            ...section,
-            components: section.components.map((component) =>
-              component.component_id === componentId
-                ? { ...component, rows: component.rows.filter((row) => row.row_id !== rowId) }
-                : component
-            )
-          }
-        : section
-    )
-  }));
-}
-
-function newSection(): RubricSection {
-  return {
-    section_id: `section_${localId()}`,
-    name: "New section",
-    description: "",
-    max_points: 0,
-    components: [newComponent()]
-  };
-}
-
-function newComponent(): RubricComponent {
-  return {
-    component_id: `component_${localId()}`,
-    name: "New sub-component",
-    description: "",
-    max_points: 0,
-    rows: [newRow()]
-  };
-}
-
-function newRow(): RubricRow {
-  return {
-    row_id: `row_${localId()}`,
-    label: "New row",
-    condition: "",
-    points: "",
-    notes: ""
-  };
-}
-
 function IntegrationsPage() {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -1591,6 +1440,7 @@ function UniversitiesPage() {
   const [unis, setUnis] = useState<University[]>([]);
   const [newUniName, setNewUniName] = useState("");
   const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [unitDrafts, setUnitDrafts] = useState<Record<string, string>>({});
@@ -1623,17 +1473,18 @@ function UniversitiesPage() {
     setNewUniCreds(null);
     try {
       const requestedAdminEmail = newAdminEmail.trim();
-      const res = await createUniversity(newUniName.trim(), requestedAdminEmail || undefined);
+      const res = await createUniversity(newUniName.trim(), requestedAdminEmail || undefined, newAdminPassword);
       setUnis(current => [...current, res]);
       setUnitDrafts(current => ({ ...current, [res.university_id]: String(res.pages_per_billable_unit) }));
       setNewUniName("");
       setNewAdminEmail("");
+      setNewAdminPassword("");
       setNotice({ type: "success", message: `Successfully registered university: ${res.name}!` });
       
       const cleanName = res.name.toLowerCase().replace(/[^a-z0-9]/g, "");
       setNewUniCreds({
         email: requestedAdminEmail || `admin@${cleanName}.edu`,
-        pass: "EverydayAI"
+        pass: newAdminPassword
       });
     } catch (err) {
       setNotice({ type: "error", message: errorMessage(err) });
@@ -1732,6 +1583,11 @@ function UniversitiesPage() {
               />
             </label>
             <p className="create-uni-help">This creates the tenant and provisions its initial admin account.</p>
+            <label>
+              Initial Admin Password
+              <input type="password" required minLength={16} autoComplete="new-password"
+                value={newAdminPassword} onChange={(e) => setNewAdminPassword(e.target.value)} />
+            </label>
             <div className="create-uni-submit-wrap">
               <button className="primary-button create-uni-submit" type="submit" disabled={saving || !newUniName.trim()}>
                 <Plus size={16} />
@@ -1829,7 +1685,7 @@ function ProfilePage({ user }: { user: AuthUser }) {
   const [passwordNotice, setPasswordNotice] = useState<Notice>(null);
   const [passwordSaving, setPasswordSaving] = useState(false);
   useEffect(() => {
-    fetchJobsStatus().then(setJobs).catch(() => setJobs([]));
+    if (user.role !== "finance_viewer") fetchJobsStatus().then(setJobs).catch(() => setJobs([]));
     fetchCurrentUser()
       .then((currentUser) => {
         setBillingRate(currentUser.billing_rate_per_unit ?? 1);
@@ -1839,7 +1695,7 @@ function ProfilePage({ user }: { user: AuthUser }) {
         setBillingRate(user.billing_rate_per_unit ?? 1);
         setLogoDataUrl(user.university_logo_data_url ?? null);
       });
-  }, [user.billing_rate_per_unit, user.university_logo_data_url]);
+  }, [user.billing_rate_per_unit, user.university_logo_data_url, user.role]);
 
   async function handleLogoSelection(files: FileList | null) {
     const file = files?.[0];
@@ -1921,12 +1777,12 @@ function ProfilePage({ user }: { user: AuthUser }) {
   const currentCharge = billingRows.reduce((sum, row) => sum + row.charge, 0);
   return (
     <div className="profile-layout">
-      <section className="panel billing-ledger">
+      {user.role !== "finance_viewer" ? <section className="panel billing-ledger">
         <div className="billing-hero">
           <div>
             <p className="eyebrow">Billing</p>
             <h2>Usage ledger</h2>
-            <p>Processed documents, page counts, billing units, and current charges.</p>
+            <p>Estimated charges using current settings. Recorded charge snapshots and invoices are in <a href="#/operations/billing">workspace Billing</a>.</p>
           </div>
           <div className="current-charge-card">
             <span>Current charge</span>
@@ -1973,7 +1829,7 @@ function ProfilePage({ user }: { user: AuthUser }) {
             </tbody>
           </table>
         </div>
-      </section>
+      </section> : <section className="panel"><h2>Workspace billing</h2><a href="#/operations/billing">Open recorded charges and invoices</a></section>}
 
       <section className="panel logo-panel">
         <div className="logo-heading">
@@ -2399,243 +2255,4 @@ function useHashPage(): [Page, (page: Page) => void] {
     setPageState(nextPage);
   }, []);
   return [page, setPage];
-}
-
-function parseHash(hash: string): Page {
-  const value = hash.replace(/^#\/?/, "").split("/")[0] as Page;
-  if (["intake", "universities", "integrations", "rubrics", "users", "profile"].includes(value)) {
-    return value;
-  }
-  return "intake";
-}
-
-function pageTitle(page: Page): string {
-  const titles: Record<Page, string> = {
-    intake: "Applicant document intake",
-    universities: "University Management",
-    integrations: "Integrations",
-    rubrics: "Rubrics",
-    users: "Users",
-    profile: "Profile"
-  };
-  return titles[page];
-}
-
-function pageEyebrow(page: Page): string {
-  const eyebrows: Record<Page, string> = {
-    intake: "Document operations",
-    universities: "Superadmin Console",
-    integrations: "Connections",
-    rubrics: "Rubric operations",
-    users: "Administration",
-    profile: "Billing"
-  };
-  return eyebrows[page];
-}
-
-function pageDescription(page: Page): string {
-  const descriptions: Record<Page, string> = {
-    intake: "Upload applicant materials, track parsing progress, review extracted details, and monitor recent intake activity.",
-    universities: "Manage university tenant accounts, rotate global programmatic credentials, and configure billing structures.",
-    integrations: "Connect external document sources and admissions systems as the workspace expands.",
-    rubrics: "Create and maintain program scoring templates used during document intake.",
-    users: "Admin-only view of accounts created for this workspace.",
-    profile: "Review processed-document usage, billable units, and current charges for this account."
-  };
-  return descriptions[page];
-}
-
-function mergeRecentJobs(current: Job[], updates: Job[]): Job[] {
-  const byId = new Map(current.map((job) => [job.job_id, job]));
-  for (const job of updates) {
-    byId.set(job.job_id, job);
-  }
-  return Array.from(byId.values())
-    .sort((left, right) => new Date(right.received_at).getTime() - new Date(left.received_at).getTime())
-    .slice(0, 20);
-}
-
-function jobsForApplication(applicationId: string, recentJobs: Job[], queueItems: UploadQueueItem[]): Job[] {
-  const byId = new Map<string, Job>();
-  for (const job of recentJobs) {
-    if (job.application_id === applicationId) {
-      byId.set(job.job_id, job);
-    }
-  }
-  for (const item of queueItems) {
-    const job = item.job;
-    if (job?.application_id === applicationId) {
-      byId.set(job.job_id, job);
-    }
-  }
-  return Array.from(byId.values()).sort(
-    (left, right) => new Date(right.received_at).getTime() - new Date(left.received_at).getTime()
-  );
-}
-
-function ensureDefaultSections(sections: SectionAnalysis[], rubric: Rubric): SectionAnalysis[] {
-  return rubric.sections.map((rubricSection) => {
-    const scoredSection = sections.find((section) => section.section_id === rubricSection.section_id);
-    if (scoredSection) {
-      return adaptScoredSectionToRubricSection(scoredSection, rubricSection);
-    }
-    return {
-      section_id: rubricSection.section_id,
-      label: rubricSection.name,
-      score: 0,
-      max_score: rubricSection.max_points,
-      evidence: ["Missing or not parsed yet. Human review required."],
-      rubric_criteria: [`${rubricSection.name} rubric review`],
-      status: "missing"
-    };
-  });
-}
-
-function adaptScoredSectionToRubricSection(
-  section: SectionAnalysis,
-  rubricSection: RubricSection
-): SectionAnalysis {
-  const sourceMax = Number(section.max_score);
-  const targetMax = Number(rubricSection.max_points);
-  const shouldScale = Number.isFinite(sourceMax) && sourceMax > 0 && Number.isFinite(targetMax) && targetMax > 0;
-  const score = shouldScale ? Math.min(targetMax, Math.max(0, (section.score / sourceMax) * targetMax)) : section.score;
-  const maxScore = shouldScale ? targetMax : section.max_score;
-  const rubricCriteria = [section.label, ...section.rubric_criteria].filter(
-    (value, index, values) => value && values.indexOf(value) === index
-  );
-  return {
-    ...section,
-    section_id: rubricSection.section_id,
-    label: rubricSection.name,
-    score,
-    max_score: maxScore,
-    rubric_criteria: rubricCriteria
-  };
-}
-
-function localId(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function fileExtension(filename: string): string {
-  return filename.split(".").pop()?.toLowerCase() ?? "";
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Logo could not be read."));
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Logo could not be read."));
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function pageCountForJob(job: Job): number {
-  const extractedRecord = job.extracted_record ?? {};
-  const documentRecord = asRecord(extractedRecord.document);
-  const metadataRecord = asRecord(extractedRecord.metadata);
-  const directCount =
-    positiveNumber(job.page_count) ??
-    positiveNumber(extractedRecord.page_count) ??
-    positiveNumber(documentRecord?.page_count) ??
-    positiveNumber(metadataRecord?.page_count);
-  if (directCount) {
-    return Math.ceil(directCount);
-  }
-  if (Array.isArray(extractedRecord.pages) && extractedRecord.pages.length) {
-    return extractedRecord.pages.length;
-  }
-  return 1;
-}
-
-function billableUnitsForPages(pages: number, pagesPerUnit?: number): number {
-  const divisor = pagesPerUnit && pagesPerUnit >= 1 ? pagesPerUnit : 10;
-  return pages > 0 ? Math.max(1, Math.ceil(pages / divisor)) : 0;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function positiveNumber(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  return value;
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD"
-  }).format(value);
-}
-
-function formatRate(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: Number.isInteger(value) ? 0 : 2
-  }).format(value);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return "Pending";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown";
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(date);
-}
-
-function formatScore(score: number, maxScore: number): string {
-  return `${trimNumber(score)} / ${trimNumber(maxScore)}`;
-}
-
-function trimNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function humanize(value: string | null | undefined): string {
-  if (!value) {
-    return "Pending";
-  }
-  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function displayUserRole(role: string): string {
-  return role === "admissions_reviewer" ? "User" : humanize(role);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unexpected error";
-}
-
-function isRequestTimeout(error: unknown): boolean {
-  return errorMessage(error).toLowerCase().includes("request timed out");
 }

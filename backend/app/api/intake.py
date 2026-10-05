@@ -56,7 +56,7 @@ async def upload_intake_document(
     cleaned_program_applied = (program_applied or "").strip()
     content = await read_upload_with_limit(file, max_bytes=settings.max_upload_bytes)
     selected_rubric_id = rubric_id.strip() or "default_admissions_rubric"
-    selected_rubric = get_saved_rubric(db, selected_rubric_id, university_id=authenticated.user.university_id)
+    selected_rubric = get_saved_rubric(db, selected_rubric_id, university_id=authenticated.university_id)
     if selected_rubric is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -70,12 +70,16 @@ async def upload_intake_document(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Application not found.",
             )
-        if authenticated.user.university_id and application.university_id != authenticated.user.university_id:
+        if authenticated.university_id and application.university_id != authenticated.university_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this application.",
             )
         applicant = application.applicant
+        from app.services.workflow import find
+        managed_case = find(db, authenticated.university_id, "case", application_id, required=False)
+        if managed_case and managed_case.payload.get("template_id"):
+            raise HTTPException(409, "Upload managed case documents through their requirement to preserve evidence versions.")
         if cleaned_applicant_name:
             applicant.first_name, applicant.last_name = _split_name(cleaned_applicant_name)
         if cleaned_program_applied:
@@ -93,6 +97,7 @@ async def upload_intake_document(
             applicant_name=cleaned_applicant_name,
             program_applied=cleaned_program_applied,
             intake_term=intake_term,
+            university_id=authenticated.university_id,
         )
         application = _get_or_create_application_case(
             db=db,
@@ -100,8 +105,12 @@ async def upload_intake_document(
             program_applied=cleaned_program_applied,
             intake_term=intake_term,
         )
-        if authenticated.user.university_id:
-            application.university_id = authenticated.user.university_id
+        from app.services.workflow import find
+        managed_case = find(db, authenticated.university_id, "case", application.application_id, required=False)
+        if managed_case and managed_case.payload.get("template_id"):
+            raise HTTPException(409, "Upload managed case documents through their requirement to preserve evidence versions.")
+        if authenticated.university_id:
+            application.university_id = authenticated.university_id
             db.commit()
 
     document_id = str(uuid4())
@@ -206,7 +215,7 @@ def list_job_status(
         query = (
             select(IntakeJob)
             .join(Application, Application.application_id == IntakeJob.application_id)
-            .where(Application.university_id == user.university_id)
+            .where(Application.university_id == authenticated.university_id)
             .order_by(IntakeJob.received_at.desc())
         )
         
@@ -214,6 +223,8 @@ def list_job_status(
     if requested_ids:
         query = query.where(IntakeJob.job_id.in_(requested_ids))
     jobs = list(db.scalars(query).unique())
+    if authenticated.workspace_role == "reviewer":
+        jobs = [job for job in jobs if _can_read_managed_job(db, authenticated, job)]
     return JobStatusResponse(jobs=[_job_to_read(job) for job in jobs])
 
 
@@ -230,8 +241,10 @@ def get_job(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     if UserRole(user.role) != UserRole.SUPERADMIN:
-        if job.application.university_id != user.university_id:
+        if job.application.university_id != authenticated.university_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this job.")
+    if not _can_read_managed_job(db, authenticated, job):
+        raise HTTPException(403, "Only the assigned reviewer can access this managed case.")
     return _job_to_read(job)
 
 
@@ -248,8 +261,10 @@ def download_job_record(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     if UserRole(user.role) != UserRole.SUPERADMIN:
-        if job.application.university_id != user.university_id:
+        if job.application.university_id != authenticated.university_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this job.")
+    if not _can_read_managed_job(db, authenticated, job):
+        raise HTTPException(403, "Only the assigned reviewer can access this managed case.")
     if job.status != "completed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -279,6 +294,16 @@ def download_job_record(
     )
 
 
+def _can_read_managed_job(db: Session, authenticated: AuthenticatedUser, job: IntakeJob) -> bool:
+    if authenticated.workspace_role != "reviewer":
+        return True
+    from app.services.workflow import find, key_hash
+    case = find(db, authenticated.university_id, "case", job.application_id, required=False)
+    if case is None or not case.payload.get("template_id"):
+        return True
+    return find(db, authenticated.university_id, "assignment", key_hash(job.application_id, authenticated.user.user_id), required=False) is not None
+
+
 def _get_or_create_applicant(
     *,
     db: Session,
@@ -287,16 +312,21 @@ def _get_or_create_applicant(
     applicant_name: str | None,
     program_applied: str | None,
     intake_term: str,
+    university_id: str | None = None,
 ) -> Applicant:
     cleaned_id = (student_unique_id or applicant_id or "").strip()
     cleaned_name = (applicant_name or "").strip()
     cleaned_program = (program_applied or "").strip()
     if cleaned_id:
         applicant = db.scalar(
-            select(Applicant).where(func.lower(Applicant.student_unique_id) == cleaned_id.lower())
+            select(Applicant).join(Application).where(
+                func.lower(Applicant.student_unique_id) == cleaned_id.lower(),
+                Application.university_id == university_id,
+            )
         )
         if applicant is None and applicant_id:
-            applicant = db.get(Applicant, applicant_id.strip())
+            applicant = db.scalar(select(Applicant).join(Application).where(
+                Applicant.applicant_id == applicant_id.strip(), Application.university_id == university_id))
         if applicant is not None:
             if applicant.student_unique_id is None:
                 applicant.student_unique_id = cleaned_id

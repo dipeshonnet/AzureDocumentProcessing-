@@ -29,7 +29,7 @@ def list_rubrics(
         require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
     ),
 ) -> list[SavedRubricRead]:
-    return [saved_rubric_to_read(rubric) for rubric in list_saved_rubrics(db, university_id=authenticated.user.university_id)]
+    return [saved_rubric_to_read(rubric) for rubric in list_saved_rubrics(db, university_id=authenticated.university_id)]
 
 
 @router.get("/diagnostics/storage", response_model=RubricStorageDiagnostics)
@@ -54,7 +54,7 @@ def rubric_storage_diagnostics(
             rubric_ids = list(
                 db.scalars(
                     select(SavedRubric.rubric_id)
-                    .where((SavedRubric.university_id == authenticated.user.university_id) | (SavedRubric.university_id.is_(None)))
+                    .where((SavedRubric.university_id == authenticated.university_id) | (SavedRubric.university_id.is_(None)))
                     .order_by(
                         SavedRubric.updated_at.desc(),
                         SavedRubric.name,
@@ -77,7 +77,7 @@ def get_rubric(
         require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER, UserRole.READ_ONLY_AUDITOR)
     ),
 ) -> SavedRubricRead:
-    rubric = get_saved_rubric(db, rubric_id, university_id=authenticated.user.university_id)
+    rubric = get_saved_rubric(db, rubric_id, university_id=authenticated.university_id)
     if rubric is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rubric not found.")
     return saved_rubric_to_read(rubric)
@@ -91,7 +91,7 @@ def create_rubric(
         require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER)
     ),
 ) -> SavedRubricRead:
-    rubric = create_saved_rubric(db, payload, university_id=authenticated.user.university_id)
+    rubric = create_saved_rubric(db, payload, university_id=authenticated.university_id)
     record_audit_log(
         db=db,
         actor=authenticated.actor,
@@ -117,7 +117,9 @@ def update_rubric(
         require_local_roles(UserRole.SUPERADMIN, UserRole.ADMIN, UserRole.ADMISSIONS_REVIEWER)
     ),
 ) -> SavedRubricRead:
-    rubric = get_saved_rubric(db, rubric_id, university_id=authenticated.user.university_id)
+    if rubric_id.startswith("workflow_"):
+        raise HTTPException(409, "Published program criteria are immutable. Create a new program draft instead.")
+    rubric = get_saved_rubric(db, rubric_id, university_id=authenticated.university_id)
     if rubric is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rubric not found.")
     old_value = {

@@ -112,10 +112,9 @@ class ApplicationProcessingOutcome:
 
 
 class ApplicationProcessingService:
-    """Orchestrates the admissions document processing pipeline.
+    """Runs the document pipeline.
 
-    Each document-level step is idempotent by default and reuses previously
-    persisted output unless the caller explicitly asks for a force refresh.
+    Reuses saved step outputs.
     """
 
     def __init__(
@@ -606,13 +605,17 @@ class ApplicationProcessingService:
         self.db.refresh(application)
 
     def _documents_for_application(self, application_id: str) -> list[ApplicationDocument]:
-        return list(
+        from app.models.workflow import WorkflowRecord
+        versions = list(self.db.scalars(select(WorkflowRecord).where(
+            WorkflowRecord.kind == "document", WorkflowRecord.application_id == application_id)))
+        superseded = {record.resource_key for record in versions if not record.payload["current"]}
+        return [document for document in list(
             self.db.scalars(
                 select(ApplicationDocument)
                 .where(ApplicationDocument.application_id == application_id)
                 .order_by(ApplicationDocument.created_at)
             )
-        )
+        ) if document.document_id not in superseded]
 
     def _score_rows_for_application(self, application_id: str) -> list[RubricCriterionScore]:
         return list(

@@ -29,7 +29,6 @@ from app.services.local_auth import ensure_demo_user
 
 logger = logging.getLogger(__name__)
 INTAKE_TERMINAL_STATUSES = {"completed", "failed"}
-INTAKE_QUEUE_WATCHDOG_SECONDS = 5.0
 
 
 async def ensure_intake_worker_started(app: FastAPI, settings: AppSettings) -> None:
@@ -37,12 +36,13 @@ async def ensure_intake_worker_started(app: FastAPI, settings: AppSettings) -> N
         return
     database_url = get_database_url(settings)
     current_url = getattr(app.state, "intake_database_url", None)
+    current_schema = getattr(app.state, "intake_database_schema", None)
     task = getattr(app.state, "intake_worker_task", None)
-    if current_url == database_url and task is not None and not task.done():
+    if current_url == database_url and current_schema == settings.database_schema and task is not None and not task.done():
         return
     await stop_intake_worker(app)
 
-    engine = create_db_engine(database_url)
+    engine = create_db_engine(database_url, settings.database_schema)
     if database_url.startswith("sqlite") or settings.auto_create_db_schema:
         init_db(engine)
     session_factory = create_session_factory(engine)
@@ -50,11 +50,12 @@ async def ensure_intake_worker_started(app: FastAPI, settings: AppSettings) -> N
 
     with session_factory() as db:
         ensure_demo_user(db)
-        queued_jobs = reset_interrupted_jobs(db)
+        queued_jobs = reset_interrupted_jobs(db, retry_processing=settings.app_env != "render-free")
         for job_id in queued_jobs:
             queue.put_nowait(job_id)
 
     app.state.intake_database_url = database_url
+    app.state.intake_database_schema = settings.database_schema
     app.state.intake_queue = queue
     app.state.intake_session_factory = session_factory
     app.state.intake_worker_task = asyncio.create_task(
@@ -79,7 +80,7 @@ async def enqueue_intake_job(app: FastAPI, job_id: str) -> None:
     queue.put_nowait(job_id)
 
 
-def reset_interrupted_jobs(db: Session) -> list[str]:
+def reset_interrupted_jobs(db: Session, *, retry_processing: bool = True) -> list[str]:
     jobs = list(
         db.scalars(
             select(IntakeJob).where(IntakeJob.status.in_(["queued", "processing"]))
@@ -87,12 +88,19 @@ def reset_interrupted_jobs(db: Session) -> list[str]:
     )
     for job in jobs:
         if job.status == "processing":
+            if not retry_processing:
+                # A remote OCR submission may already have consumed credits.
+                # Require a deliberate retry when its completion is uncertain.
+                job.status = "failed"
+                job.completed_at = datetime.now(timezone.utc)
+                job.status_message = "Processing was interrupted. Review the OCR credit usage before retrying."
+                continue
             job.status = "queued"
             job.progress = 0
             job.started_at = None
             job.status_message = "Processing was interrupted. Waiting to restart."
     db.commit()
-    return [job.job_id for job in jobs]
+    return [job.job_id for job in jobs if job.status == "queued"]
 
 
 async def intake_worker_loop(
@@ -103,7 +111,12 @@ async def intake_worker_loop(
 ) -> None:
     while True:
         try:
-            job_id = await asyncio.wait_for(queue.get(), timeout=INTAKE_QUEUE_WATCHDOG_SECONDS)
+            if settings.intake_queue_watchdog_seconds:
+                job_id = await asyncio.wait_for(
+                    queue.get(), timeout=settings.intake_queue_watchdog_seconds
+                )
+            else:
+                job_id = await queue.get()
         except TimeoutError:
             enqueue_queued_jobs(queue=queue, session_factory=session_factory)
             continue
@@ -490,6 +503,9 @@ def trigger_university_webhook_direct(job: IntakeJob, webhook_url: str) -> None:
 
 
 def dispatch_job_webhook(db: Session, job: IntakeJob) -> None:
+    from app.services.workflow_billing import record_usage
+    record_usage(db, job)
+    db.commit()
     if not job.application or not job.application.university_id:
         return
     from app.models.admissions import University

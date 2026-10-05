@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 JobStatus = Literal["queued", "processing", "completed", "failed"]
-UserRoleValue = Literal["superadmin", "admin", "admissions_reviewer", "read_only_auditor"]
+UserRoleValue = Literal["superadmin", "admin", "admissions_reviewer", "read_only_auditor", "finance_viewer"]
 
 
 class IntakeSchema(BaseModel):
@@ -22,6 +22,7 @@ class AuthUserRead(IntakeSchema):
     university_logo_data_url: str | None = None
     university_id: str | None = None
     pages_per_billable_unit: int = 10
+    workspace_role: str | None = None
 
 
 class AuthResponse(IntakeSchema):
@@ -189,6 +190,7 @@ class RubricStorageDiagnostics(IntakeSchema):
 class UniversityCreate(BaseModel):
     name: str = Field(min_length=1)
     admin_email: str | None = None
+    admin_password: str | None = Field(default=None, min_length=16)
 
 
 class UniversityRead(BaseModel):

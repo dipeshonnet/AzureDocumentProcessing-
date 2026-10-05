@@ -492,7 +492,8 @@ def test_auditor_cannot_upload(intake_client: tuple[TestClient, sessionmaker[Ses
     assert response.status_code == 403
 
 
-def test_reset_interrupted_jobs_requeues_processing_jobs() -> None:
+@pytest.mark.parametrize('retry_processing', [True, False])
+def test_reset_interrupted_jobs_requeues_processing_jobs(retry_processing) -> None:
     engine = create_db_engine("sqlite:///:memory:")
     init_db(engine)
     session_factory = create_session_factory(engine)
@@ -529,10 +530,14 @@ def test_reset_interrupted_jobs_requeues_processing_jobs() -> None:
         session.add_all([applicant, processing_job, queued_job])
         session.commit()
 
-        requeued = reset_interrupted_jobs(session)
+        requeued = reset_interrupted_jobs(session, retry_processing=retry_processing)
 
-        assert set(requeued) == {processing_job.job_id, queued_job.job_id}
+        assert set(requeued) == ({processing_job.job_id, queued_job.job_id} if retry_processing else {queued_job.job_id})
         refreshed = session.get(IntakeJob, processing_job.job_id)
         assert refreshed is not None
-        assert refreshed.status == "queued"
-        assert refreshed.status_message == "Processing was interrupted. Waiting to restart."
+        assert refreshed.status == ("queued" if retry_processing else "failed")
+        if retry_processing:
+            assert refreshed.status_message == "Processing was interrupted. Waiting to restart."
+        else:
+            assert refreshed.completed_at is not None
+            assert "credit usage before retrying" in refreshed.status_message

@@ -57,7 +57,7 @@ def build_database_readiness_status(settings: AppSettings) -> DatabaseReadinessS
             required_tables={SavedRubric.__tablename__: False},
         )
 
-    engine = create_db_engine(settings.database_url)
+    engine = create_db_engine(settings.database_url, settings.database_schema)
     try:
         inspector = inspect(engine)
         return DatabaseReadinessStatus(

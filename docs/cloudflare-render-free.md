@@ -1,0 +1,83 @@
+# Cloudflare Pages + Render + Supabase + LlamaParse
+
+The selected deployment uses Free plans only. Do not add a payment method,
+upgrade a plan, enable paid inference, or enable Cloudflare R2. The API stops
+at startup if the `render-free` settings are incompatible with this profile.
+
+## Backend
+
+Deploy the public Git repository `dipeshonnet/AzureDocumentProcessing-`, branch
+`codex/free-cloudflare-render`, as one Render **Free Web Service** in Singapore.
+Use Python 3.12.14, `pip install -r requirements-free.txt`, and:
+
+```text
+python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT --workers 1
+```
+
+Health path: `/health`. No persistent disk, background worker, Render database,
+paid preview environment, or automatic deploy. `render.yaml` contains all settings.
+Enter these privately in Render Environment, never in Git or chat:
+
+| Setting | Value |
+| --- | --- |
+| DATABASE_URL | `postgresql+psycopg://postgres.eqqwjzrnkvbznjmhsdta:<percent-encoded-password>@aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres?sslmode=require` |
+| SUPABASE_SERVICE_KEY | Existing project server-only secret/service_role key |
+| LLAMA_CLOUD_API_KEY | Existing LlamaParse Free project key |
+| BOOTSTRAP_ADMIN_EMAIL | Your chosen administrator login |
+| BOOTSTRAP_ADMIN_PASSWORD | New unique password, at least 16 characters |
+| BACKEND_CORS_ORIGINS | `https://admissions.everydayai.work,https://<actual-project>.pages.dev` |
+
+Use Supabase project **AdmissionAnalyzer** (`eqqwjzrnkvbznjmhsdta`) in EverydayAI.
+The app creates its tables in the private `admissions_app` schema, revokes browser
+roles' schema access, and never falls back to `public`. Keep this schema out of
+Supabase's exposed API schemas. Use **session pooler port 5432**, not transaction
+pooler 6543, because the app uses a persistent database search path.
+
+Create a **private** Supabase Storage bucket `admissions-raw`, maximum file size
+4 MB. The server key stays in Render; the frontend gets only the API URL.
+
+## Frontend and domain
+
+Create a Cloudflare Pages **Direct Upload** project, then build against the actual
+Render service URL:
+
+```powershell
+.\scripts\build-cloudflare-pages.ps1 -ApiUrl https://<actual-service>.onrender.com
+```
+
+Portable Node/npm installations can pass `-NodePath` and `-NpmCliPath`.
+Upload `.tools/cloudflare-pages.zip`. Verify the default Pages domain before
+adding `admissions.everydayai.work` through Pages > Custom domains. Cloudflare
+should create the DNS binding for the existing `everydayai.work` zone. Inspect any
+existing `admissions` DNS record before replacing it; leave other records alone.
+No Pages Functions are required. Hash routing needs no SPA rewrite configuration.
+
+## Verification and operational limits
+
+```powershell
+.venv\Scripts\python.exe scripts/smoke-azure-mvp.py --help
+```
+
+Use the smoke script with the real API/frontend URLs, `--database-dialect postgresql`,
+and a privately entered administrator password. Verify database readiness, login,
+private upload, tenant permissions, case workflow, and logout. For a live OCR
+check use only a fictional three-page fixture and confirm all three pages appear.
+Enable external processing approval for the fictional institution first.
+
+LlamaParse uses the cost-effective tier with no automatic SDK retries or paid
+fallback. Provider uploads are deleted after parsing where possible. If Render
+interrupts a processing job, it becomes failed and requires a deliberate retry;
+check the provider credit usage first, because an earlier submission may already
+have consumed credits. Queued jobs and completed OCR persist in Supabase.
+
+Render Free sleeps when idle and has ephemeral local storage. Supabase Free can
+pause inactive projects. Render hours are shared across services; this workspace
+already contains an unrelated `qcc-api` service. Do not use synthetic keep-alive
+traffic. Monitor shared usage and allow services to suspend when quotas run out.
+Manual invitation links work without SMTP. Classification, summaries, extracted
+fields and rubric scores use labeled demo backends; OCR alone is live.
+
+Provider references: [Render Free](https://render.com/docs/free),
+[Pages limits](https://developers.cloudflare.com/pages/platform/limits/),
+[Supabase connections](https://supabase.com/docs/guides/database/connecting-to-postgres),
+[LlamaParse pricing](https://developers.llamaindex.ai/llamaparse/general/pricing/).
