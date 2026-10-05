@@ -7,7 +7,8 @@ at startup if the `render-free` settings are incompatible with this profile.
 ## Backend
 
 Deploy the public Git repository `dipeshonnet/AzureDocumentProcessing-`, branch
-`codex/free-cloudflare-render`, as one Render **Free Web Service** in Singapore.
+`codex/free-cloudflare-render`, as one Render **Free Web Service** named
+`admissions-everydayai-api` in Singapore.
 Use Python 3.12.14, `pip install -r requirements-free.txt`, and:
 
 ```text
@@ -25,7 +26,7 @@ Enter these privately in Render Environment, never in Git or chat:
 | LLAMA_CLOUD_API_KEY | Existing LlamaParse Free project key |
 | BOOTSTRAP_ADMIN_EMAIL | Your chosen administrator login |
 | BOOTSTRAP_ADMIN_PASSWORD | New unique password, at least 16 characters |
-| BACKEND_CORS_ORIGINS | `https://admissions.everydayai.work,https://<actual-project>.pages.dev` |
+| BACKEND_CORS_ORIGINS | `https://admissions.everydayai.work,https://admissions-everydayai.pages.dev` |
 
 Use Supabase project **AdmissionAnalyzer** (`eqqwjzrnkvbznjmhsdta`) in EverydayAI.
 The app creates its tables in the private `admissions_app` schema, revokes browser
@@ -38,7 +39,8 @@ Create a **private** Supabase Storage bucket `admissions-raw`, maximum file size
 
 ## Frontend and domain
 
-Create a Cloudflare Pages **Direct Upload** project, then build against the actual
+The Cloudflare Pages **Direct Upload** project `admissions-everydayai` is created.
+Its default domain is `admissions-everydayai.pages.dev`. Build against the actual
 Render service URL:
 
 ```powershell

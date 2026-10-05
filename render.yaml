@@ -1,7 +1,7 @@
 # Never omit plan: Render's default compute plan is paid.
 services:
   - type: web
-    name: admissions-api
+    name: admissions-everydayai-api
     runtime: python
     plan: free
     region: singapore
@@ -33,7 +33,7 @@ services:
       - key: PUBLIC_APP_URL
         value: https://admissions.everydayai.work
       - key: BACKEND_CORS_ORIGINS
-        sync: false
+        value: https://admissions.everydayai.work,https://admissions-everydayai.pages.dev
       - key: STORAGE_BACKEND
         value: supabase
       - key: SUPABASE_URL
