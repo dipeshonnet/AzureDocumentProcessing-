@@ -19,13 +19,16 @@ function Invoke-FrontendNpm([string[]]$Arguments) {
 $oldApiUrl = $env:VITE_API_BASE_URL
 $oldPath = $env:PATH
 $output = Join-Path $repoRoot '.tools/cloudflare-pages'
+if (-not [IO.Path]::GetFullPath($output).StartsWith([IO.Path]::GetFullPath($repoRoot) + [IO.Path]::DirectorySeparatorChar)) {
+    throw 'Build output must remain within the repository.'
+}
 try {
     $env:PATH = (Split-Path $NodePath -Parent) + ';' + $env:PATH
     $env:VITE_API_BASE_URL = $ApiUrl
     Push-Location (Join-Path $repoRoot 'frontend')
     try {
         Invoke-FrontendNpm @('ci', '--no-audit', '--no-fund')
-        Invoke-FrontendNpm @('run', 'build', '--', '--outDir', $output)
+        Invoke-FrontendNpm @('run', 'build', '--', '--outDir', $output, '--emptyOutDir')
     } finally { Pop-Location }
     $files = Get-ChildItem -LiteralPath $output -File -Recurse
     if ($files.Count -gt 1000 -or ($files | Where-Object Length -gt 25MB)) {
