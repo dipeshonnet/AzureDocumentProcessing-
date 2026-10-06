@@ -72,5 +72,5 @@ def test_blueprint_has_only_one_explicit_free_service():
     assert len(blueprint['services']) == 1
     service = blueprint['services'][0]
     assert service['type'] == 'web' and service['plan'] == 'free'
-    assert service['autoDeployTrigger'] == 'off'
+    assert service['autoDeployTrigger'] == 'commit'
     assert 'disk' not in service and 'scaling' not in service
