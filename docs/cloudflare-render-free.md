@@ -67,6 +67,11 @@ Production source: `dipeshonnet/AzureDocumentProcessing-`, branch
 the API through Render and the frontend through `.github/workflows/deploy-cloudflare-pages.yml`.
 Pushes to `main` do not deploy this hosting stack.
 
+The Render GitHub app has access to this repository, and the existing Render
+service uses its Git Provider connection. Both Cloudflare repository secrets
+were configured on October 6, 2026. A public repository URL alone does not provide
+Render with GitHub push events; retain the app's repository access for auto-deploys.
+
 The workflow installs locked npm dependencies, runs frontend tests, builds with
 `VITE_API_BASE_URL=https://admissions-everydayai-api.onrender.com`, and uploads
 `frontend/dist` to the existing `admissions-everydayai` Pages project. The explicit
