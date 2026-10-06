@@ -15,8 +15,14 @@ The backend, Pages frontend and custom domain are live. Cloudflare reports the
 domain as Active with SSL enabled, and HTTPS serves the app successfully. Health,
 both CORS origins and static security headers passed checks. Protected routes
 reject unauthenticated requests.
-Authenticated private-upload and live OCR verification are pending administrator
-sign-in. Do not interpret successful health checks as verification of OCR output.
+Authenticated private-upload and live OCR verification passed on October 6, 2026.
+The fictional three-page `deployment-smoke.pdf` completed, and the review screen
+showed the expected text from pages 1, 2 and 3. The original is in the private
+`admissions-raw` bucket; an unauthenticated public object request was denied.
+LlamaParse usage showed one Cost Effective job, three pages and nine Free credits
+used, with 9,991 credits remaining. This verifies OCR and storage, not the accuracy
+of the labeled demo classification, summaries or scores. The synthetic record is
+identified by student ID `FREE-DEPLOY-SMOKE-001` and is not a real application.
 
 ## Backend
 

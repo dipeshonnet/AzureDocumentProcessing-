@@ -775,7 +775,7 @@ function LatestReview({
             <SummaryTile label="Received at" value={formatDateTime(job.received_at)} />
             <SummaryTile label="Pipeline status" value={humanize(job.status)} />
             <SummaryTile label="Document type" value={humanize(job.document_type)} />
-            <SummaryTile label="Parsing engine" value={job.parser_mode} />
+            <SummaryTile label="Processing mode" value={['azure', 'live'].includes(job.parser_mode.toLowerCase()) ? 'Live OCR' : humanize(job.parser_mode)} />
           </div>
           <ApplicationDossier jobs={applicationJobs.length ? applicationJobs : [job]} />
           <div className={`status-message status-message-${job.status}`}>
