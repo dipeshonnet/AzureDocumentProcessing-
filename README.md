@@ -3,6 +3,9 @@
 Production-oriented admissions review app.
 Backend, frontend, prompts, evals, and docs live here.
 
+Deployed pilot: [admissions.everydayai.work](https://admissions.everydayai.work).
+Uses Cloudflare Pages Free, Render Free, Supabase Free and LlamaParse Free.
+
 Use the **Cases** workspace for program checklists, source verification, reviewer
 sign-off, CSV exchange and commercial reporting. See the [case workflow guide](docs/admissions-case-workflows.md)
 for setup, role access and database upgrade instructions.

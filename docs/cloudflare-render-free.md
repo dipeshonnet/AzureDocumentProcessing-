@@ -4,6 +4,20 @@ The selected deployment uses Free plans only. Do not add a payment method,
 upgrade a plan, enable paid inference, or enable Cloudflare R2. The API stops
 at startup if the `render-free` settings are incompatible with this profile.
 
+## Deployment addresses
+
+- Frontend: `https://admissions-everydayai.pages.dev`
+- Backend: `https://admissions-everydayai-api.onrender.com`
+- Custom domain: `https://admissions.everydayai.work`
+- Render service: `srv-db25pp3bc2fs73fbpfr0`
+
+The backend, Pages frontend and custom domain are live. Cloudflare reports the
+domain as Active with SSL enabled, and HTTPS serves the app successfully. Health,
+both CORS origins and static security headers passed checks. Protected routes
+reject unauthenticated requests.
+Authenticated private-upload and live OCR verification are pending administrator
+sign-in. Do not interpret successful health checks as verification of OCR output.
+
 ## Backend
 
 Deploy the public Git repository `dipeshonnet/AzureDocumentProcessing-`, branch
@@ -44,7 +58,7 @@ Its default domain is `admissions-everydayai.pages.dev`. Build against the actua
 Render service URL:
 
 ```powershell
-.\scripts\build-cloudflare-pages.ps1 -ApiUrl https://<actual-service>.onrender.com
+.\scripts\build-cloudflare-pages.ps1 -ApiUrl https://admissions-everydayai-api.onrender.com
 ```
 
 Portable Node/npm installations can pass `-NodePath` and `-NpmCliPath`.
