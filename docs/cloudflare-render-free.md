@@ -35,8 +35,9 @@ Use Python 3.12.14, `pip install -r requirements-free.txt`, and:
 python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT --workers 1
 ```
 
-Health path: `/health`. No persistent disk, background worker, Render database,
-paid preview environment, or automatic deploy. `render.yaml` contains all settings.
+Health path: `/health`. Render auto-deploys on commits pushed to
+`codex/free-cloudflare-render`. No persistent disk, background worker, Render database,
+or paid preview environment. `render.yaml` contains all settings.
 Enter these privately in Render Environment, never in Git or chat:
 
 | Setting | Value |
@@ -58,6 +59,35 @@ Create a **private** Supabase Storage bucket `admissions-raw`, maximum file size
 4 MB. The server key stays in Render; the frontend gets only the API URL.
 
 ## Frontend and domain
+
+### Automatic deployments from GitHub
+
+Production source: `dipeshonnet/AzureDocumentProcessing-`, branch
+`codex/free-cloudflare-render`. Push or merge changes into this branch to update
+the API through Render and the frontend through `.github/workflows/deploy-cloudflare-pages.yml`.
+Pushes to `main` do not deploy this hosting stack.
+
+The workflow installs locked npm dependencies, runs frontend tests, builds with
+`VITE_API_BASE_URL=https://admissions-everydayai-api.onrender.com`, and uploads
+`frontend/dist` to the existing `admissions-everydayai` Pages project. The explicit
+Wrangler `--branch=main` selects the Pages production environment; the GitHub
+production source branch is still `codex/free-cloudflare-render`.
+
+Add these **GitHub Actions repository secrets** once:
+
+- `CLOUDFLARE_ACCOUNT_ID`: the account owning the Pages project.
+- `CLOUDFLARE_API_TOKEN`: a token with Account / Cloudflare Pages / Edit, scoped
+  to that account. Never commit the token or add it to frontend environment files.
+
+The frontend workflow cannot publish until those secrets are configured. Inspect
+GitHub Actions for frontend failures and Render Events for backend failures.
+Deployments complete independently. Supabase database and private objects persist;
+application schema changes still need compatible migration planning.
+
+Cloudflare Direct Upload projects support CI uploads without a native Git connection:
+[Cloudflare CI guide](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/).
+
+### Manual deployment fallback
 
 The Cloudflare Pages **Direct Upload** project `admissions-everydayai` is created.
 Its default domain is `admissions-everydayai.pages.dev`. Build against the actual
