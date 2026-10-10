@@ -461,8 +461,8 @@ def mark_failed(db: Session, job: IntakeJob, message: str, metadata: dict[str, A
 
 
 def trigger_university_webhook_direct(job: IntakeJob, webhook_url: str) -> None:
-    import urllib.request
     import json
+    from app.services.webhooks import post_webhook
     
     payload = {
         "event": f"job.{job.status}",
@@ -482,16 +482,12 @@ def trigger_university_webhook_direct(job: IntakeJob, webhook_url: str) -> None:
     
     def send_post():
         try:
-            req = urllib.request.Request(
-                webhook_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": "AdmissionAnalyser-Webhook/1.0"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                logger.info("Webhook for job %s delivered successfully to %s. Status code: %s", job.job_id, webhook_url, response.status)
-        except Exception as exc:
-            logger.error("Failed to deliver webhook for job %s to %s: %s", job.job_id, webhook_url, exc)
+            status_code = post_webhook(webhook_url, json.dumps(payload).encode("utf-8"))
+            logger.info("Webhook for job %s delivered. Status code: %s", job.job_id, status_code)
+        except Exception:
+            # Destinations, query secrets and provider exceptions may contain
+            # credentials or applicant information; do not include them.
+            logger.error("Webhook delivery failed for job %s", job.job_id)
             
     try:
         loop = asyncio.get_running_loop()

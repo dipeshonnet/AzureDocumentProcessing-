@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response
-from sqlalchemy import distinct, func, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.db.dependencies import get_db
-from app.models import AuditLog, LocalUser
+from app.models import AuditLog, AuthSession, LocalUser
 from app.schemas.intake import (
     AuthResponse,
     AuthUserRead,
@@ -108,6 +108,12 @@ def update_password(
             detail="Current password is incorrect.",
         )
     authenticated.user.password_hash = hash_password(payload.new_password)
+    # Revoke compromised sessions atomically with the password update. The
+    # frontend retains its current token; an API key retains no bearer session.
+    db.execute(delete(AuthSession).where(
+        AuthSession.user_id == authenticated.user.user_id,
+        AuthSession.token != authenticated.token,
+    ))
     db.commit()
     return {"ok": True}
 
@@ -284,6 +290,12 @@ def update_university_integration(
     if not uni:
         raise HTTPException(status_code=404, detail="University not found.")
         
+    from app.services.webhooks import validate_webhook_url
+    if payload.webhook_url is not None:
+        try:
+            validate_webhook_url(payload.webhook_url)
+        except ValueError as exc:
+            raise HTTPException(400, "Webhook must be a public HTTP or HTTPS URL without credentials or fragments.") from exc
     uni.webhook_url = payload.webhook_url
     db.commit()
     db.refresh(uni)

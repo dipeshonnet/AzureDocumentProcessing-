@@ -122,6 +122,8 @@ def update_rubric(
     rubric = get_saved_rubric(db, rubric_id, university_id=authenticated.university_id)
     if rubric is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rubric not found.")
+    if not authenticated.university_id or not rubric.university_id or rubric.university_id != authenticated.university_id:
+        raise HTTPException(403, "Shared rubric templates cannot be edited. Duplicate the template into your workspace first.")
     old_value = {
         "name": rubric.name,
         "section_count": len(rubric.sections),

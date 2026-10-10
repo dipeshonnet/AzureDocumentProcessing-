@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from app.security import AuthenticatedActor, UserRole
 DEMO_EMAIL = "superadmin"
 DEMO_PASSWORD = "EverydayAI"
 HASH_ITERATIONS = 120_000
+SESSION_LIFETIME = timedelta(hours=24)
 
 
 class AuthError(Exception):
@@ -166,6 +167,13 @@ def user_for_token(*, db: Session, token: str) -> LocalUser | None:
     session = db.get(AuthSession, token)
     if session is None:
         return None
+    # SQLite returns naive datetimes for this timezone-aware column.
+    created_at = session.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - created_at
+    if age < timedelta(0) or age >= SESSION_LIFETIME:
+        return None
     return session.user
 
 
@@ -194,12 +202,10 @@ def get_authenticated_user(
             select(LocalUser)
             .where(LocalUser.university_id == university.university_id, LocalUser.role == UserRole.ADMIN.value)
         )
+        # Integration keys must never inherit an arbitrary staff identity,
+        # particularly the Default University's platform superadmin.
         if admin_user is None:
-            admin_user = db.scalar(
-                select(LocalUser).where(LocalUser.university_id == university.university_id)
-            )
-        if admin_user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No user associated with university API key.")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No tenant administrator associated with university API key.")
         if x_workspace_id and x_workspace_id != university.university_id:
             raise HTTPException(403, "An API key cannot switch university workspaces.")
         return AuthenticatedUser(user=admin_user, token=api_key, workspace_id=university.university_id)
